@@ -1,3 +1,5 @@
+> For the Slack-only mention/chat pilot on Railway, follow [CHAT-SETUP.md](CHAT-SETUP.md). The Notion intake instructions below describe the separate original mode.
+
 # Deploying immediate intake
 
 ## Current state

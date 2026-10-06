@@ -270,8 +270,9 @@ def process(store, job, clients, cfg):
 
 
 class Application:
-    def __init__(self, cfg, store):
+    def __init__(self, cfg, store, event_filter=accept_event):
         self.cfg, self.store = cfg, store
+        self.event_filter = event_filter
 
     def __call__(self, env, start):
         def respond(code, value):
@@ -279,7 +280,7 @@ class Application:
             start(code, [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
         if env.get('PATH_INFO') == '/healthz' and env.get('REQUEST_METHOD') == 'GET':
-            return respond('200 OK', {'status': 'listening', 'intake_enabled': self.cfg['enabled']})
+            return respond('200 OK', {'status': 'listening', 'intake_enabled': self.cfg['enabled'] if not self.cfg.get('chat_mode') else False, 'chat_enabled': self.cfg['enabled'] if self.cfg.get('chat_mode') else False})
         if env.get('PATH_INFO') != '/slack/events' or env.get('REQUEST_METHOD') != 'POST':
             return respond('404 Not Found', {})
         try:
@@ -297,7 +298,7 @@ class Application:
             if not self.cfg['enabled']:
                 return respond('503 Service Unavailable', {'error': 'intake_disabled'})
             if body.get('type') == 'event_callback':
-                event = accept_event(body, self.cfg)
+                event = self.event_filter(body, self.cfg)
                 if event:
                     self.store.enqueue(event)
             return respond('200 OK', {'ok': True})
