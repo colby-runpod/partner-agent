@@ -1,0 +1,2 @@
+# Optional. The offline pilot and Notion reader use only Python's standard library.
+openai-agents

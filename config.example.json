@@ -1,0 +1,11 @@
+{
+  "name": "Partner Deal Registration",
+  "pages": [],
+  "fields": {
+    "status": "Status",
+    "owner": "Owner",
+    "due": "Due Date",
+    "next_step": "Next Step",
+    "blocker": "Blockers / Risks"
+  }
+}

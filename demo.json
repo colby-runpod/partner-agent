@@ -1,0 +1,7 @@
+{
+  "name": "Partner Deal Registration - DEMO",
+  "records": [
+    {"id": "demo-objective", "title": "Launch the partner deal registration pilot", "status": "In Progress", "owner": "Demo owner", "due": "2026-10-12", "next_step": "Review the intake fields and agree on routing owners.", "blocker": "Approval owner has not been confirmed.", "url": ""},
+    {"id": "demo-task", "title": "Document partner intake requirements", "status": "Done", "owner": "Demo owner", "due": "2026-10-05", "next_step": "", "blocker": "", "url": ""}
+  ]
+}
