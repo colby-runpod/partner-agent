@@ -1,6 +1,6 @@
 # Immediate partner intake
 
-Confirmed destination: **Partner Intake & Qualification**, Notion data source `ffecfb43-625c-42c6-a6af-1f8951641bba`. Schema inspected October 6, 2026. `intake-routing.json` records the intended mapping; no runtime consumes it yet.
+Confirmed destination: **Partner Intake & Qualification**, Notion data source `ffecfb43-625c-42c6-a6af-1f8951641bba`. Schema inspected October 6, 2026. `intake.py` now uses this destination and defaults from `intake-routing.json`; the service has not been deployed or tested against live accounts.
 
 ## Intended flow
 
@@ -25,4 +25,4 @@ Confirmed destination: **Partner Intake & Qualification**, Notion data source `f
 
 Slack app installation and channel membership, event subscriptions for the public and private channels, verified request handling, a durable queue/worker, Notion API access to this data source, Slack reply credentials, approved hosting, and an end-to-end test. Existing Codex connector access does not automatically grant the deployed application its own credentials.
 
-The current executable remains the preview-only objective brief. No intake records have been created and no live listener is enabled by this mapping.
+The intake listener, durable worker, Notion writer, source lookup, and threaded reply path are implemented and tested with fake clients. No live intake records have been created. See DEPLOYMENT.md for the current limits, setup, and activation steps.

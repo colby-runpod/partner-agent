@@ -1,6 +1,6 @@
 # Partner Agent
 
-Runpod's internal partnerships agent. This repository starts with a **preview-only objective briefing pilot**. It is not deployed and does not send Slack messages or modify Notion.
+Runpod's internal partnerships agent. Includes a **preview-only objective briefing pilot** and an **immediate Slack intake service**. Neither is deployed. The intake service can create Notion entries and reply in Slack only after credentials, hosting, and `INTAKE_ENABLED=true` are configured. See [deployment instructions](DEPLOYMENT.md).
 
 ## Run the pilot
 

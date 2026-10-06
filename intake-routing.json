@@ -1,6 +1,6 @@
 {
   "enabled": false,
-  "implementation_status": "design_only_not_loaded_by_runtime",
+  "implementation_status": "implemented_not_deployed",
   "notion": {
     "database_id": "e5e29cef-e2d9-4e9b-b763-57328d483861",
     "data_source_id": "ffecfb43-625c-42c6-a6af-1f8951641bba",

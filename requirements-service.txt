@@ -1,0 +1,2 @@
+# Web server only; core intake and tests use Python standard library.
+gunicorn==23.0.0
