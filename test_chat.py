@@ -78,14 +78,36 @@ class ChatTests(unittest.TestCase):
         text=api.call_args.args[2]['text']
         self.assertTrue(text.startswith('<@U1>'));self.assertNotIn('<!channel>',text);self.assertNotIn('<@UEVIL>',text)
 
-    @patch.dict('os.environ', {'OPENAI_API_KEY':'test', 'OPENAI_MODEL':'test'})
-    @patch('chat.api')
-    def test_model_response(self, api):
-        api.return_value={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'Summary'}]}]}
+    @patch.dict('os.environ', {'ANTHROPIC_API_KEY':'test-secret', 'ANTHROPIC_MODEL':'claude-test'})
+    @patch('chat.urllib.request.urlopen')
+    def test_model_response(self, urlopen):
+        def response(data):
+            urlopen.return_value.__enter__.return_value = io.BytesIO(json.dumps(data).encode())
+        response({'stop_reason':'end_turn','content':[{'type':'thinking','thinking':'hidden'}, {'type':'text','text':'Summary'}]})
         self.assertEqual(chat.ChatClients().answer(chat.accept(BODY,CFG),'evidence'),'Summary')
-        self.assertFalse(api.call_args.args[2]['store'])
-        self.assertNotIn('tools',api.call_args.args[2])
-        api.return_value={'status':'incomplete'}
+        request=urlopen.call_args.args[0]
+        self.assertEqual(request.full_url,'https://api.anthropic.com/v1/messages')
+        headers={k.lower():v for k,v in request.header_items()}
+        self.assertEqual(headers['x-api-key'],'test-secret')
+        self.assertEqual(headers['anthropic-version'],'2023-06-01')
+        payload=json.loads(request.data)
+        self.assertEqual(payload['model'],'claude-test')
+        self.assertEqual(payload['system'],chat.INSTRUCTIONS)
+        self.assertNotIn('tools',payload)
+        response({'stop_reason':'max_tokens','content':[{'type':'text','text':'Partial'}]})
         with self.assertRaises(ValueError): chat.ChatClients().answer(chat.accept(BODY,CFG),'evidence')
+
+    @patch.dict('os.environ', {'ANTHROPIC_API_KEY':'secret', 'ANTHROPIC_MODEL':'test'})
+    @patch('chat.urllib.request.urlopen', side_effect=TimeoutError('private detail'))
+    def test_claude_timeout_sanitized(self, urlopen):
+        with self.assertRaisesRegex(ValueError, '^Claude response unavailable$'):
+            chat.ChatClients().answer(chat.accept(BODY,CFG),'evidence')
+
+    @patch.dict('os.environ', {'CHAT_ENABLED':'true', 'SLACK_BOT_TOKEN':'test', 'ANTHROPIC_API_KEY':'test', 'ANTHROPIC_MODEL':'test'}, clear=True)
+    @patch('chat.load_config', return_value={})
+    def test_claude_configuration_without_openai(self, cfg):
+        self.assertTrue(chat.config()['enabled'])
+        with patch.dict('os.environ', {'ANTHROPIC_MODEL':''}):
+            with self.assertRaisesRegex(ValueError,'ANTHROPIC_MODEL'): chat.config()
 
 if __name__=='__main__': unittest.main()

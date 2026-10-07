@@ -5,6 +5,8 @@ import os
 import re
 import time
 import urllib.parse
+import urllib.request
+import urllib.error
 from intake import Application, Store, api, flatten, load_config
 
 INSTRUCTIONS = '''You are Team Partner Agent, a concise, practical Runpod partnerships assistant.
@@ -25,7 +27,7 @@ def config():
     cfg['channels'] = set(filter(None, os.environ.get('CHAT_CHANNEL_IDS', 'C0BQKEQLSKH').split(',')))
     cfg['users'] = set(filter(None, os.environ.get('CHAT_USER_IDS', 'U0BEHPEJA6L').split(',')))
     if cfg['enabled']:
-        for name in ('SLACK_BOT_TOKEN', 'OPENAI_API_KEY', 'OPENAI_MODEL'):
+        for name in ('SLACK_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'):
             if not os.environ.get(name):
                 raise ValueError('Missing environment setting: ' + name)
     return cfg
@@ -80,15 +82,26 @@ class ChatClients:
         return context
 
     def answer(self, event, context):
-        data = api('https://api.openai.com/v1/responses', os.environ['OPENAI_API_KEY'], {
-            'model': os.environ['OPENAI_MODEL'], 'instructions': INSTRUCTIONS,
-            'input': json.dumps({'thread_evidence': context, 'request': event['text']}),
-            'max_output_tokens': 1600, 'store': False})
-        if data.get('status') != 'completed':
-            raise ValueError('Incomplete model response')
-        text = '\n'.join(c.get('text', '') for item in data.get('output', [])
-                         if item.get('type') == 'message' for c in item.get('content', [])
-                         if c.get('type') == 'output_text').strip()
+        payload = {
+            'model': os.environ['ANTHROPIC_MODEL'], 'system': INSTRUCTIONS,
+            'messages': [{'role': 'user', 'content': json.dumps({
+                'thread_evidence': context, 'request': event['text']})}],
+            'max_tokens': 1600}
+        request = urllib.request.Request('https://api.anthropic.com/v1/messages',
+            data=json.dumps(payload).encode(), headers={
+                'x-api-key': os.environ['ANTHROPIC_API_KEY'],
+                'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = json.load(response)
+        except urllib.error.HTTPError as exc:
+            raise ValueError('Claude HTTP ' + str(exc.code)) from None
+        except (OSError, ValueError):
+            raise ValueError('Claude response unavailable') from None
+        if data.get('stop_reason') != 'end_turn':
+            raise ValueError('Incomplete Claude response')
+        text = '\n'.join(c.get('text', '') for c in data.get('content', [])
+                         if c.get('type') == 'text').strip()
         if not text:
             raise ValueError('Empty model response')
         return text[:3000]
@@ -113,7 +126,7 @@ def process(store, job, clients):
             try:
                 text = clients.answer(event, context)
             except Exception:
-                text = 'I could not generate an answer. Please check the OpenAI API key, model access, and billing in Railway, then tag me again.'
+                text = 'I could not generate an answer. Please check the Anthropic API key, model access, and billing in Railway, then tag me again.'
         store.update(key, state='done', reply=text)
     job = store.get(key)
     if job['reply'] and job['reply_state'] == 'pending':
