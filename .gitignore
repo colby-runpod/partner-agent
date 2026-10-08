@@ -4,3 +4,8 @@ __pycache__/
 state/
 output/
 *.sqlite3
+
+node_modules/
+partneros/.env*
+!partneros/.env.example
+partneros/artifacts/

@@ -1,0 +1,6 @@
+import {createHmac,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
+export function passwordHash(password:string,salt=randomBytes(16).toString('hex')){return salt+':'+scryptSync(password,salt,64).toString('hex');}
+export function verifyPassword(password:string,hash:string){try{const [salt,key]=hash.split(':');const expected=Buffer.from(key,'hex'),actual=scryptSync(password,salt,64);return actual.length===expected.length&&timingSafeEqual(actual,expected);}catch{return false;}}
+export function sign(value:string,secret:string){return createHmac('sha256',secret).update(value).digest('hex');}
+export function newSession(secret:string){const data=Buffer.from(JSON.stringify({exp:Date.now()+8*3600000,csrf:randomBytes(24).toString('hex')})).toString('base64url');return data+'.'+sign(data,secret);}
+export function session(cookie:string|undefined,secret:string){try{const token=(cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('partneros='))?.slice(10);if(!token)return null;const [data,sig]=token.split('.');const expected=sign(data,secret);if(sig.length!==expected.length||!timingSafeEqual(Buffer.from(sig),Buffer.from(expected)))return null;const s=JSON.parse(Buffer.from(data,'base64url').toString());return s.exp>Date.now()&&typeof s.csrf==='string'?s:null;}catch{return null;}}
