@@ -19,6 +19,7 @@ export function makeServer(repo:Repository,env=process.env){
  const redirect=(dest:string)=>{res.writeHead(303,{Location:dest});res.end();};
  try{
  if(path==='/healthz'){await repo.db.query('SELECT 1');res.writeHead(200,{'Content-Type':'application/json'});res.end('{"status":"ready"}');return;}
+ if(path==='/runpod-logo.svg'){res.writeHead(200,{'Content-Type':'image/svg+xml'});res.end(await readFile(new URL('../public/runpod-logo.svg',import.meta.url)));return;}
  if(path==='/style.css'){res.writeHead(200,{'Content-Type':'text/css'});res.end(await readFile(new URL('../public/style.css',import.meta.url)));return;}
  const s=session(req.headers.cookie,secret);
  if(req.method==='POST'&&req.headers.origin!==origin){send('Request origin rejected',403);return;}

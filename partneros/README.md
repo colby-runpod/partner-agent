@@ -95,3 +95,7 @@ pnpm test
 ```
 
 Tests cover exact-domain duplication, null-score semantics, fake evidence references, stale review rejection, human-note preservation, suppression, pause, budget limits, worker leases and disk persistence, provider failure visibility, fixed outbound endpoints, source-injection inability to invoke actions, password/session checks, CSRF, escaped HTML, and absent external-write endpoints. Local browser checks verify desktop/mobile rendering with fixture data. UI artifacts live under ignored `artifacts/`.
+
+## Brand assets
+
+Dashboard styling follows https://www.runpod.io/brandkit with Runpod purple (#5D29F0), dark surfaces, and the official unmodified white logo stored in public/runpod-logo.svg. ABC Diatype is first in the font stack; system fonts are used when it is unavailable. No proprietary font files are bundled.
