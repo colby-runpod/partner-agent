@@ -159,9 +159,12 @@ def extract(event):
     # Full details are required for initial intake; this worker does not interpret general commands.
     fields = {}
     for line in text.splitlines():
-        match = re.match(r'^\*?(Contact|Company|Email|Website|Stated ask)\*?:\*?\s*(.*)', line.strip(), re.I)
+        # HubSpot form digests label the person "Name:"; manual captures use "Contact:".
+        match = re.match(r'^\*?(Contact|Name|Company|Email|Website|Stated ask)\*?:\*?\s*(.*)', line.strip(), re.I)
         if match:
             fields[match[1].lower()] = plain(match[2])
+    if not fields.get('contact') and fields.get('name'):
+        fields['contact'] = fields['name']
     email = fields.get('email', '')
     if email and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
         email = ''
