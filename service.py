@@ -8,9 +8,15 @@ import time
 
 def main():
     chat = os.environ.get('CHAT_ENABLED') == 'true'
-    target = 'chat:create_app()' if chat else 'intake:create_app()'
+    review = os.environ.get('REVIEW_ENABLED') == 'true'
+    # review.py serves chat mentions too, so it takes over whenever reviews are on.
+    target = 'review:create_app()' if review else 'chat:create_app()' if chat else 'intake:create_app()'
     commands = [['gunicorn', '--bind', '0.0.0.0:8080', '--workers', '1', '--threads', '4', target]]
-    if chat:
+    if review:
+        from review import config
+        config()  # Validate before starting either child.
+        commands.append([sys.executable, 'review.py'])
+    elif chat:
         from chat import config
         config()  # Validate before starting either child.
         commands.append([sys.executable, 'chat.py'])
