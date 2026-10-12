@@ -229,5 +229,171 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(cfg['review_enabled']); self.assertFalse(cfg['enabled'])
 
 
+
+MANUAL = dict(type='event_callback', team_id='T1', api_app_id='A1', event_id='Ev7', event=dict(
+    type='app_mention', channel='CSUB', user='U1', ts='50.9', thread_ts='50.1', text='<@UBOT> review'))
+
+
+def manual(**changes):
+    b = copy.deepcopy(MANUAL)
+    b['event'].update(changes)
+    return b
+
+
+class ManualTriggerTests(unittest.TestCase):
+    def test_accepts_review_mention_in_thread(self):
+        e = review.accept_manual(MANUAL, CFG)
+        self.assertEqual((e['kind'], e['thread_ts'], e['user']), ('review_manual', '50.1', 'U1'))
+        self.assertIsNotNone(review.accept_manual(manual(text='<@UBOT>  Review this please'), CFG))
+        self.assertIsNotNone(review.accept_manual(manual(channel='C1'), CFG))  # chat channels too
+
+    def test_rejects_other_mentions(self):
+        for change in [dict(thread_ts=None), dict(thread_ts='50.9'), dict(user='UOTHER'), dict(text='<@UBOT> summarize'),
+                       dict(text='<@UBOT> what should we review?'), dict(channel='COTHER'), dict(bot_id='B1'),
+                       dict(type='message')]:
+            b = manual(**change)
+            if change.get('thread_ts', 1) is None:
+                b['event'].pop('thread_ts')
+            self.assertIsNone(review.accept_manual(b, CFG), change)
+        self.assertIsNone(review.accept_manual(MANUAL, dict(CFG, review_enabled=False)))
+
+    def test_manual_wins_over_chat(self):
+        self.assertEqual(review.accept(manual(channel='C1'), CFG)['kind'], 'review_manual')
+        self.assertNotIn('kind', review.accept(MENTION, CFG))
+
+    def test_process_fetches_parent_then_reviews(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q'); e = review.accept_manual(MANUAL, CFG); store.enqueue(e)
+            client = Fake(); seen = []
+            client.parent = lambda ev: 'DIGEST TEXT'
+            client.review = lambda ev: seen.append(ev['text']) or 'card'
+            review.process(store, store.next_job(), client)
+            self.assertEqual(seen, ['DIGEST TEXT']); self.assertEqual(client.posted, [('50.9', 'card')])
+
+    def test_process_not_a_digest(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q'); store.enqueue(review.accept_manual(MANUAL, CFG)); client = Fake()
+            client.parent = lambda ev: (_ for _ in ()).throw(review.NotDigest())
+            review.process(store, store.next_job(), client)
+            self.assertEqual(client.posted[0][1], review.NOT_DIGEST); self.assertEqual(client.calls, 0)
+
+    def test_process_unreadable_thread(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q'); store.enqueue(review.accept_manual(MANUAL, CFG)); client = Fake()
+            client.parent = lambda ev: (_ for _ in ()).throw(TimeoutError('slack'))
+            review.process(store, store.next_job(), client)
+            self.assertEqual(client.posted[0][1], review.THREAD_UNREADABLE); self.assertEqual(client.calls, 0)
+
+    @patch.dict('os.environ', {'SLACK_BOT_TOKEN': 'xoxb-test'})
+    @patch('review.api')
+    def test_parent_must_be_hubspot_digest(self, api):
+        e = review.accept_manual(MANUAL, CFG)
+        api.return_value = {'messages': [{'ts': '50.1', 'bot_id': 'BHUB', 'text': DIGEST}]}
+        self.assertIn('PARTNERSHIP MQL DIGEST', review.ReviewClients(CFG).parent(e))
+        self.assertIn('ts=50.1', api.call_args.args[0])
+        api.return_value = {'messages': [{'ts': '50.1', 'user': 'U1', 'text': DIGEST}]}
+        with self.assertRaises(review.NotDigest):
+            review.ReviewClients(CFG).parent(e)
+        api.return_value = {'messages': [{'ts': '49.0', 'bot_id': 'BHUB', 'text': DIGEST}]}
+        with self.assertRaises(ValueError):
+            review.ReviewClients(CFG).parent(e)
+
+    @patch.dict('os.environ', {'SLACK_BOT_TOKEN': 'xoxb-test'})
+    @patch('review.api')
+    def test_manual_reply_goes_in_thread_and_tags_requester(self, api):
+        review.ReviewClients(CFG).post(review.accept_manual(MANUAL, CFG), 'card')  # CFG is shadow mode
+        sent = api.call_args.args[2]
+        self.assertEqual((sent['channel'], sent['thread_ts'], sent['text']), ('CSUB', '50.1', '<@U1> card'))
+
+
+ROW = {'url': 'https://www.notion.so/row1', 'properties': {
+    'Contact': {'type': 'title', 'title': [{'plain_text': 'Demo Person'}]},
+    'Company': {'type': 'rich_text', 'rich_text': [{'plain_text': 'Example Inc'}]},
+    'Status': {'type': 'select', 'select': {'name': 'DQ'}},
+    'Qualification Score': {'type': 'select', 'select': {'name': '2'}},
+    'Forward To': {'type': 'select', 'select': {'name': 'Partnerships'}},
+    'Submitted': {'type': 'date', 'date': {'start': '2026-10-05'}}}}
+
+
+class HistoryTests(unittest.TestCase):
+    def test_digest_fields(self):
+        self.assertEqual(review.digest_fields(DIGEST), ('demo@example.com', 'Example Inc'))
+        self.assertEqual(review.digest_fields('*Email:* Bob@Gmail.com\n*Company:* N/A'), ('bob@gmail.com', ''))
+
+    @patch.dict('os.environ', {'NOTION_TOKEN': 'secret_x'})
+    @patch('review.api')
+    def test_lookup_builds_filters_and_parses(self, api):
+        api.side_effect = [{'results': [ROW]}, {'results': [{'url': 'https://www.notion.so/app1'}]}]
+        h = review.NotionHistory(dict(CFG, notion_intake='INTAKE', notion_apps='APPS')).lookup(DIGEST)
+        first = api.call_args_list[0]
+        self.assertIn('/data_sources/INTAKE/query', first.args[0])
+        self.assertEqual(first.args[3], '2025-09-03')
+        terms = first.args[2]['filter']['or']
+        self.assertIn({'property': 'Email', 'email': {'ends_with': '@example.com'}}, terms)
+        self.assertIn({'property': 'Company', 'rich_text': {'contains': 'Example Inc'}}, terms)
+        self.assertEqual(h['intake'][0]['status'], 'DQ'); self.assertEqual(h['applications'][0]['url'], 'https://www.notion.so/app1')
+
+    @patch.dict('os.environ', {'NOTION_TOKEN': 'secret_x'})
+    @patch('review.api')
+    def test_free_mail_skips_domain_and_apps_failure_tolerated(self, api):
+        api.side_effect = [{'results': []}, ValueError('applications query failed')]
+        h = review.NotionHistory(dict(CFG, notion_intake='I', notion_apps='A')).lookup('*Email:* bob@gmail.com\n*Company:* N/A')
+        self.assertEqual(api.call_args_list[0].args[2]['filter'], {'or': [{'property': 'Email', 'email': {'equals': 'bob@gmail.com'}}]})
+        self.assertEqual(h, {'intake': [], 'applications': []})
+
+    def test_render_history(self):
+        self.assertEqual(review.render_history(None), [])
+        self.assertIn('lookup failed', ' '.join(review.render_history('unavailable')))
+        lines = review.render_history({'intake': [{'contact': 'Demo', 'company': 'Ex', 'status': 'DQ', 'score': '2',
+                                                   'route': 'Partnerships', 'submitted': '2026-10-05', 'url': 'https://www.notion.so/r'}],
+                                       'applications': [{'url': 'https://www.notion.so/a'}]})
+        self.assertIn('• <https://www.notion.so/r|Demo, Ex> - DQ, score 2, Partnerships, 2026-10-05', lines)
+        self.assertIn('• <https://www.notion.so/a|Partner application on file>', lines)
+        self.assertIn('No earlier rows', ' '.join(review.render_history({'intake': [], 'applications': []})))
+
+    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'k', 'ANTHROPIC_MODEL': 'm'})
+    @patch('review.urllib.request.urlopen')
+    def test_history_reaches_model_and_card(self, urlopen):
+        urlopen.return_value.__enter__.return_value = io.BytesIO(json.dumps(
+            {'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': json.dumps(GOOD)}]}).encode())
+        class H:
+            def lookup(self, text): return {'intake': [], 'applications': []}
+        card = review.ReviewClients(CFG, history=H()).review(review.accept_review(BODY, CFG))
+        sent = json.loads(json.loads(urlopen.call_args.args[0].data)['messages'][0]['content'])
+        self.assertEqual(sent['notion_history'], {'intake': [], 'applications': []})
+        self.assertIn('No earlier rows', card)
+
+    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'k', 'ANTHROPIC_MODEL': 'm'})
+    @patch('review.urllib.request.urlopen')
+    def test_history_failure_is_reported_not_fatal(self, urlopen):
+        urlopen.return_value.__enter__.return_value = io.BytesIO(json.dumps(
+            {'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': json.dumps(GOOD)}]}).encode())
+        class H:
+            def lookup(self, text): raise RuntimeError('notion down')
+        card = review.ReviewClients(CFG, history=H()).review(review.accept_review(BODY, CFG))
+        self.assertIn('lookup failed', card)
+        sent = json.loads(json.loads(urlopen.call_args.args[0].data)['messages'][0]['content'])
+        self.assertEqual(sent['notion_history'], 'unavailable')
+
+
+class DiagnosticsTests(unittest.TestCase):
+    @patch('review.config', return_value=dict(CFG, review_enabled=True, review_mode='shadow', web_search=True,
+                                               notion_lookup=False, chat_enabled=False))
+    def test_healthz_reports_review_state(self, _):
+        with tempfile.TemporaryDirectory() as d, patch.dict('os.environ', {'CHAT_DB': d + '/q.db'}):
+            app = review.create_app(); out = []
+            body = app({'PATH_INFO': '/healthz', 'REQUEST_METHOD': 'GET'}, lambda code, headers: out.append(code))
+        data = json.loads(b''.join(body))
+        self.assertEqual(out, ['200 OK'])
+        self.assertEqual((data['review_enabled'], data['review_mode'], data['chat_enabled'], data['notion_lookup']),
+                         (True, 'shadow', False, False))
+
+    def test_ignored_digest_from_unknown_bot_is_logged_without_content(self):
+        with patch('builtins.print') as p:
+            self.assertIsNone(review.accept_review(body(bot_id='BNEW1'), CFG))
+        msg = p.call_args.args[0]
+        self.assertIn('bot_id=BNEW1', msg); self.assertNotIn('Demo Person', msg)
+
+
 if __name__ == '__main__':
     unittest.main()

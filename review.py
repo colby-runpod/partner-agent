@@ -9,6 +9,13 @@ REVIEW_MODE=shadow (default) posts cards to a separate channel with a link back
 to the submission, so the team never sees an unvetted review. REVIEW_MODE=thread
 replies in the submission's own thread. Chat mentions keep working unchanged;
 both share the one queue and worker.
+
+Manual trigger: mention the bot with "review" in a digest's thread to run the
+review on demand; the card replies in that thread.
+
+Notion history (optional): with NOTION_TOKEN set, the review looks up prior
+intake rows and partner applications for the same email, domain or company.
+Read-only queries; nothing is written.
 """
 import html
 import json
@@ -34,6 +41,12 @@ DECISIONS = {'pursue': ':large_green_circle: Pursue',
              'triage': ':large_yellow_circle: Needs triage',
              'do_not_pursue': ':red_circle: Do not pursue'}
 MAX_DIGEST = 20000
+TRIGGER = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*review\b', re.I)
+FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+             'yahoo.com', 'ymail.com', 'proton.me', 'protonmail.com', 'icloud.com', 'me.com', 'aol.com',
+             'gmx.com', 'gmx.de', 'web.de', 'mail.com', 'mail.ru', 'yandex.ru', 'yandex.com', 'qq.com',
+             '163.com', '126.com', 'naver.com', 'zoho.com', 'fastmail.com', 'hushmail.com', 'tutanota.com'}
+NOTION_VERSION = '2025-09-03'
 
 INSTRUCTIONS = '''You are Team Partner Agent, Runpod's partnerships reviewer. You receive one HubSpot
 partnership digest. Qualify it and return ONE JSON object, nothing else. You are advisory: Colby
@@ -86,6 +99,13 @@ affiliate program", "Route to Carmela and Adriana (events)", "Create a Research 
 "No action". Never suggest promising credits, pricing, capacity, partner status, deal protection,
 commission, resale rights or exclusivity. Never say a decision has been made.
 
+notion_history lists earlier rows in Runpod's intake tracker and partner applications that match this
+email, domain or company ("not_configured" or "unavailable" if the lookup did not run). Use it: the
+same person or company DQ'd recently with nothing materially new is a duplicate, so do not pursue; an
+active row (New, Actioned, In Review, Flagged, Follow Up) means it is already being worked, so say so
+and suggest no second handoff; a partner application on file means they are already in the
+application flow. Never invent history and never treat an empty lookup as proof of anything.
+
 Return exactly this JSON shape, plain strings, no markdown:
 {"company": "", "contact": "", "partnership_type": "<one of: %s>",
  "route": "<one of: %s>", "score": "<5|4|3|2|1|DQ>",
@@ -113,6 +133,9 @@ def config():
     cfg['review_mode'] = os.environ.get('REVIEW_MODE', 'shadow')
     cfg['shadow_channel'] = os.environ.get('REVIEW_SHADOW_CHANNEL_ID', 'C0C7R970C5T')
     cfg['web_search'] = os.environ.get('REVIEW_WEB_SEARCH', 'true') != 'false'
+    cfg['notion_intake'] = os.environ.get('REVIEW_NOTION_INTAKE_ID', 'ffecfb43-625c-42c6-a6af-1f8951641bba')
+    cfg['notion_apps'] = os.environ.get('REVIEW_NOTION_APPS_ID', '3e3ff732-fc34-807e-8b49-000bf49490ca')
+    cfg['notion_lookup'] = bool(os.environ.get('NOTION_TOKEN'))
     if cfg['review_mode'] not in ('shadow', 'thread'):
         raise ValueError('REVIEW_MODE must be shadow or thread')
     if cfg['review_enabled']:
@@ -131,7 +154,13 @@ def accept_review(body, cfg):
         return None
     if e.get('type') != 'message' or e.get('subtype') not in (None, 'bot_message'):
         return None
-    if e.get('channel') not in cfg['review_channels'] or e.get('bot_id') not in cfg['review_bots']:
+    if e.get('channel') not in cfg['review_channels']:
+        return None
+    if e.get('bot_id') not in cfg['review_bots']:
+        if any(marker in flatten(e) for marker in DIGEST_MARKERS):
+            # Visible in Railway logs; no message content is printed.
+            print('Review ignored a digest-like message from bot_id=%s; add it to REVIEW_BOT_IDS if it is HubSpot.'
+                  % re.sub(r'[^A-Z0-9]', '', str(e.get('bot_id') or 'none')), flush=True)
         return None
     ts = e.get('ts', '')
     if not body.get('event_id') or not re.fullmatch(r'\d+\.\d+', ts):
@@ -141,11 +170,39 @@ def accept_review(body, cfg):
     text = flatten(e)
     if not any(marker in text for marker in DIGEST_MARKERS):
         return None
+    print('Review queued digest %s' % ts, flush=True)
     return dict(kind='review', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
                 channel=e['channel'], ts=ts, thread_ts=ts, text=text[:MAX_DIGEST])
 
 
+def accept_manual(body, cfg):
+    """'@Team Partner Agent review' inside a digest's thread, from an allowed user."""
+    e = body.get('event', {})
+    if not cfg.get('review_enabled'):
+        return None
+    if body.get('team_id') != cfg['team_id'] or body.get('api_app_id') != cfg['app_id']:
+        return None
+    if e.get('type') != 'app_mention' or e.get('subtype') or e.get('bot_id'):
+        return None
+    if e.get('user') not in cfg.get('users', set()):
+        return None
+    if e.get('channel') not in cfg['review_channels'] | cfg.get('channels', set()):
+        return None
+    ts, thread = e.get('ts', ''), e.get('thread_ts')
+    if not body.get('event_id') or not re.fullmatch(r'\d+\.\d+', ts):
+        return None
+    if not thread or thread == ts or not re.fullmatch(r'\d+\.\d+', thread):
+        return None  # Must be a reply inside the digest's thread.
+    if not TRIGGER.match(e.get('text', '')):
+        return None
+    return dict(kind='review_manual', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
+                channel=e['channel'], ts=ts, thread_ts=thread, user=e['user'], text='')
+
+
 def accept(body, cfg):
+    event = accept_manual(body, cfg)
+    if event:
+        return event
     if cfg.get('chat_enabled'):
         event = chat.accept(body, cfg)
         if event:
@@ -155,7 +212,81 @@ def accept(body, cfg):
 
 def create_app():
     cfg = config()
-    return Application(cfg, Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
+    app = Application(cfg, Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
+
+    def wsgi(env, start):
+        if env.get('PATH_INFO') == '/healthz' and env.get('REQUEST_METHOD') == 'GET':
+            data = json.dumps({'status': 'listening', 'chat_enabled': cfg['chat_enabled'],
+                               'review_enabled': cfg['review_enabled'], 'review_mode': cfg['review_mode'],
+                               'web_search': cfg['web_search'], 'notion_lookup': cfg['notion_lookup'],
+                               'intake_enabled': False}).encode()
+            start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
+            return [data]
+        return app(env, start)
+    return wsgi
+
+
+def digest_fields(text):
+    email = re.search(r'Email:\*?\s*(?:<mailto:([^|>\s]+)[^>]*>|([^\s<>*]+@[^\s<>*]+))', text)
+    company = re.search(r'Company:\*?[ \t]*([^\n]*)', text)
+    email = (email.group(1) or email.group(2)).strip().lower() if email else ''
+    company = re.sub(r'[*_`<>]', '', company.group(1)).strip() if company else ''
+    if company.lower() in ('', 'n/a', 'na', 'none', '-', 'not stated'):
+        company = ''
+    return email, company[:80]
+
+
+def _prop(page, name):
+    value = (page.get('properties') or {}).get(name) or {}
+    kind = value.get('type')
+    data = value.get(kind)
+    if kind in ('title', 'rich_text'):
+        return ''.join(part.get('plain_text', '') for part in data or [])
+    if kind in ('select', 'status'):
+        return (data or {}).get('name', '')
+    if kind == 'date':
+        return (data or {}).get('start', '') or ''
+    if kind in ('email', 'url', 'number'):
+        return str(data or '')
+    return ''
+
+
+class NotionHistory:
+    """Read-only lookups in the intake tracker and partner applications."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def _query(self, source, flt):
+        return api('https://api.notion.com/v1/data_sources/%s/query' % source, os.environ['NOTION_TOKEN'],
+                   {'filter': flt, 'page_size': 5}, NOTION_VERSION).get('results', [])
+
+    def lookup(self, text):
+        email, company = digest_fields(text)
+        domain = email.split('@')[-1] if '@' in email else ''
+        terms = []
+        if email:
+            terms.append({'property': 'Email', 'email': {'equals': email}})
+        if domain and domain not in FREE_MAIL:
+            terms.append({'property': 'Email', 'email': {'ends_with': '@' + domain}})
+        if len(company) >= 3:
+            terms.append({'property': 'Company', 'rich_text': {'contains': company}})
+        rows, apps = [], []
+        if terms:
+            for page in self._query(self.cfg['notion_intake'], {'or': terms}):
+                rows.append({'contact': _prop(page, 'Contact'), 'company': _prop(page, 'Company'),
+                             'status': _prop(page, 'Status'), 'score': _prop(page, 'Qualification Score'),
+                             'route': _prop(page, 'Forward To'), 'submitted': _prop(page, 'Submitted'),
+                             'url': page.get('url', '')})
+        if email:
+            try:
+                found = self._query(self.cfg['notion_apps'],
+                                    {'property': 'Primary Contact Email', 'email': {'equals': email}})
+            except Exception:
+                found = []  # Applications are a bonus; intake history still counts.
+            apps = [{'url': page.get('url', '')} for page in found]
+        rows.sort(key=lambda r: r['submitted'], reverse=True)
+        return {'intake': rows[:5], 'applications': apps[:3]}
 
 
 def _clean(value, limit):
@@ -199,7 +330,27 @@ def parse(raw):
     return review
 
 
-def render(review):
+def render_history(history):
+    if history is None:
+        return []
+    if history == 'unavailable':
+        return ['', '*History* Notion lookup failed, so prior submissions were not checked.']
+    lines = ['', '*History*']
+    for row in history['intake']:
+        label = _clean('%s, %s' % (row['contact'] or 'unknown', row['company'] or 'unknown'), 90)
+        url = row['url'] if re.fullmatch(r'https://[^\s<>|]{4,400}', row['url'] or '') else ''
+        bits = [b for b in (_clean(row['status'], 20), row['score'] and 'score ' + _clean(row['score'], 4),
+                            _clean(row['route'], 30), _clean(row['submitted'][:10], 10)) if b]
+        lines.append('• %s - %s' % ('<%s|%s>' % (url, label) if url else label, ', '.join(bits) or 'no details'))
+    for app in history['applications']:
+        if re.fullmatch(r'https://[^\s<>|]{4,400}', app['url'] or ''):
+            lines.append('• <%s|Partner application on file>' % app['url'])
+    if len(lines) == 2:
+        lines.append('• No earlier rows in the intake tracker for this email, domain or company.')
+    return lines
+
+
+def render(review, history=None):
     lines = ['*Partner review · %s*' % review['company'],
              '*Contact* %s  |  *Type* %s  |  *Route* %s' % (review['contact'], review['partnership_type'], review['route']),
              '*Score* %s  ·  %s' % (review['score'], DECISIONS[review['decision']])]
@@ -214,15 +365,39 @@ def render(review):
     lines += ['', ':point_right: *Suggested next step:* ' + review['next_step']]
     if review['risks']:
         lines += ['', ':warning: *Risks*'] + ['• ' + r for r in review['risks']]
+    lines += render_history(history)
     if review['sources']:
         lines += ['', '*Sources* ' + '  ·  '.join('<%s|%s>' % s for s in review['sources'])]
     lines += ['', '_Advisory only. Nothing was sent, and Notion and HubSpot were not changed._']
     return '\n'.join(lines)
 
 
+class NotDigest(Exception):
+    pass
+
+
+class ThreadUnreadable(Exception):
+    pass
+
+
 class ReviewClients:
-    def __init__(self, cfg):
+    def __init__(self, cfg, history=None):
         self.cfg = cfg
+        self.history = history or (NotionHistory(cfg) if cfg.get('notion_lookup') else None)
+
+    def parent(self, event):
+        """Fetch the thread's parent message and confirm it is a HubSpot digest."""
+        params = urllib.parse.urlencode({'channel': event['channel'], 'ts': event['thread_ts'],
+                                         'limit': 1, 'inclusive': 'true'})
+        data = api('https://slack.com/api/conversations.replies?' + params, os.environ['SLACK_BOT_TOKEN'])
+        messages = data.get('messages') or []
+        if not messages or messages[0].get('ts') != event['thread_ts']:
+            raise ValueError('Missing parent message')
+        parent = messages[0]
+        text = flatten(parent)
+        if parent.get('bot_id') not in self.cfg['review_bots'] or not any(m in text for m in DIGEST_MARKERS):
+            raise NotDigest()
+        return text[:MAX_DIGEST]
 
     def _call(self, payload):
         request = urllib.request.Request('https://api.anthropic.com/v1/messages',
@@ -237,8 +412,19 @@ class ReviewClients:
         except (OSError, ValueError):
             raise ValueError('Claude response unavailable') from None
 
+    def lookup(self, text):
+        if not self.history:
+            return None
+        try:
+            return self.history.lookup(text)
+        except Exception:
+            return 'unavailable'
+
     def review(self, event):
-        messages = [{'role': 'user', 'content': json.dumps({'hubspot_digest': event['text']})}]
+        history = self.lookup(event['text'])
+        context = history if isinstance(history, dict) else (history or 'not_configured')
+        messages = [{'role': 'user', 'content': json.dumps({'hubspot_digest': event['text'],
+                                                           'notion_history': context})}]
         payload = {'model': os.environ['ANTHROPIC_MODEL'], 'system': INSTRUCTIONS,
                    'max_tokens': 3000, 'messages': messages}
         if self.cfg['web_search']:
@@ -253,12 +439,16 @@ class ReviewClients:
             raise ValueError('Incomplete Claude response')
         # Web search splits answers into cited text blocks; join without separators.
         text = ''.join(c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text')
-        return render(parse(text))
+        return render(parse(text), history)
 
     def post(self, event, text):
         token = os.environ['SLACK_BOT_TOKEN']
         message = {'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False}
-        if self.cfg['review_mode'] == 'thread':
+        if event.get('kind') == 'review_manual':
+            # Asked for in a thread, so answer there, tagging only the verified requester.
+            message.update(channel=event['channel'], thread_ts=event['thread_ts'],
+                           text='<@%s> %s' % (event['user'], text))
+        elif self.cfg['review_mode'] == 'thread':
             message.update(channel=event['channel'], thread_ts=event['ts'])
         else:
             params = urllib.parse.urlencode({'channel': event['channel'], 'message_ts': event['ts']})
@@ -272,12 +462,29 @@ FAILED = ('I could not complete a review of this submission. Check the Anthropic
           'search access in Railway. Nothing else was affected; the Notion pipeline still runs as normal.')
 
 
+THREAD_UNREADABLE = ("I couldn't read the first message of this thread. Check that I'm in this channel and have "
+                     'history access, then tag me again.')
+NOT_DIGEST = ("This thread doesn't start with a HubSpot partnership digest, so there's nothing for me to review. "
+              'Tag me with "review" inside a digest\'s thread.')
+
+
 def process(store, job, clients):
     event, key = json.loads(job['payload']), job['key']
     if job['state'] in ('pending', 'processing'):
         store.update(key, state='processing')
         try:
+            if event.get('kind') == 'review_manual':
+                try:
+                    event = dict(event, text=clients.parent(event))
+                except NotDigest:
+                    raise
+                except Exception:
+                    raise ThreadUnreadable() from None
             text = clients.review(event)
+        except NotDigest:
+            text = NOT_DIGEST
+        except ThreadUnreadable:
+            text = THREAD_UNREADABLE
         except Exception:
             text = FAILED
         store.update(key, state='done', reply=text)
@@ -307,7 +514,7 @@ def worker():
             job = store.next_job()
             if not job:
                 time.sleep(0.5)
-            elif json.loads(job['payload']).get('kind') == 'review':
+            elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients)
             else:
                 chat.process(store, job, chat_clients)
