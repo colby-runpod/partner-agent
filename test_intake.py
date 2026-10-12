@@ -104,6 +104,21 @@ class IntakeTests(unittest.TestCase):
         self.assertNotIn('Submitted', payload['properties'])
         self.assertNotIn('Google Form Completed', payload['properties'])
 
+    def test_hubspot_digest_name_maps_to_contact(self):
+        body = event(True)
+        body['event']['text'] = ('HubSpot: Incoming Partnership Request\n\nName: Demo Person\n'
+                                 'Email: <mailto:demo@example.com|demo@example.com>\nCompany: Example Inc\n'
+                                 'Reason: \nHow can we help?: Explore an integration.')
+        data = extract(accept_event(body, self.cfg))
+        self.assertEqual(data['contact'], 'Demo Person')
+        self.assertEqual(data['company'], 'Example Inc')
+        self.assertEqual(data['email'], 'demo@example.com')
+
+    def test_explicit_contact_wins_over_name(self):
+        body = event()
+        body['event']['text'] = '*Name:* Form Name\n*Contact:* Real Person\n*Company:* Example Inc'
+        self.assertEqual(extract(accept_event(body, self.cfg))['contact'], 'Real Person')
+
     def test_block_message_extraction(self):
         body = event(True)
         body['event'].pop('text')

@@ -1,8 +1,12 @@
+## Partner Development workspace
+
+The new first-release PartnerOS application is in [`partneros/`](partneros/README.md). It adds an authenticated candidate pipeline, evidence-backed research adapters, durable Postgres jobs and a human review queue. It is a separate development deployment; the existing Slack service remains in this repository root. See its guide for tested capabilities and pending integrations.
+
 > For the Slack-only mention/chat pilot on Railway, follow [CHAT-SETUP.md](CHAT-SETUP.md). The Notion intake instructions below describe the separate original mode.
 
 # Partner Agent
 
-Runpod's internal partnerships agent. Includes a **preview-only objective briefing pilot** and an **immediate Slack intake service**. Neither is deployed. The intake service can create Notion entries and reply in Slack only after credentials, hosting, and `INTAKE_ENABLED=true` are configured. See [deployment instructions](DEPLOYMENT.md).
+Runpod's internal partnerships agent. Includes a **preview-only objective briefing pilot** and an **immediate Slack intake service**. The Slack chat receiver has been deployed separately; the original Notion intake mode remains paused pending setup. The intake service can create Notion entries and reply in Slack only after credentials, hosting, and `INTAKE_ENABLED=true` are configured. See [deployment instructions](DEPLOYMENT.md).
 
 ## Run the pilot
 

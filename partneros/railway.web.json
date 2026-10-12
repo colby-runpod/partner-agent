@@ -1,0 +1,1 @@
+{"$schema":"https://railway.com/railway.schema.json","build":{"builder":"DOCKERFILE","dockerfilePath":"Dockerfile"},"deploy":{"preDeployCommand":"node src/migrate.ts","startCommand":"node src/server.ts","healthcheckPath":"/healthz","restartPolicyType":"ON_FAILURE","restartPolicyMaxRetries":5}}
