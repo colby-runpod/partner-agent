@@ -20,6 +20,29 @@ features on the same queue and worker.
   the submissions channel sees it.
 - `REVIEW_MODE=thread` replies under the digest itself.
 
+## Manual review
+
+Mention the bot with "review" inside a digest's thread, for example
+`@Team Partner Agent review`, and it runs the full review on that thread's
+HubSpot digest. The card is posted in the same thread and tags you. It
+answers only users in `CHAT_USER_IDS`, in `REVIEW_CHANNEL_IDS` or
+`CHAT_CHANNEL_IDS`. If the thread doesn't start with a HubSpot digest, it says
+so. Other mentions still go to chat as before.
+
+## Notion history (optional)
+
+Set `NOTION_TOKEN` to an internal Notion integration with read access, and
+share these with it (database → ⋯ → Connections):
+
+- Partner Intake & Qualification (`REVIEW_NOTION_INTAKE_ID`)
+- Partner Program Applications (`REVIEW_NOTION_APPS_ID`)
+
+Each review then looks up earlier rows that match the email, the email domain
+(skipped for free-mail addresses) or the company name, plus any application
+made with the same email. Claude sees the matches, and the card shows a
+*History* section with links. The bot only reads Notion, never writes to it.
+If the lookup fails, the card says so and the review still runs.
+
 ## Setup
 
 1. **Slack app.** In Team Partner Agent → Event Subscriptions → Subscribe to bot
@@ -61,8 +84,11 @@ expect more "unverified".
   never resent automatically.
 - Work is serial. A review takes roughly 30-90 seconds, and chat mentions wait
   behind it.
-- `/healthz` reports `chat_enabled: true` whenever the receiver is on, even if
-  only reviews are enabled.
+- `/healthz` shows `review_enabled`, `review_mode`, `web_search` and
+  `notion_lookup`, so you can check the live settings at a glance.
+- Railway logs print `Review queued digest <ts>` for each digest picked up. A
+  digest-looking post from an unexpected bot prints its `bot_id` so you can add
+  it to `REVIEW_BOT_IDS`. No message content is logged.
 
 ## Phase 2 (not built)
 
@@ -70,3 +96,4 @@ expect more "unverified".
 - The bot creates the Notion row, and the scheduled pipeline stops creating
   rows from Slack.
 - HubSpot contact links on the card.
+- Partners database lookup (needs its data source ID).
