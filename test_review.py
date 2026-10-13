@@ -395,5 +395,28 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('bot_id=BNEW1', msg); self.assertNotIn('Demo Person', msg)
 
 
+
+class PolishTests(unittest.TestCase):
+    def test_citation_markup_removed(self):
+        r = review.parse(json.dumps(dict(GOOD, why='<cite index="1-2">Built In describes it</cite> as real.')))
+        self.assertEqual(r['why'], 'Built In describes it as real.')
+        self.assertNotIn('cite', review.render(r))
+
+    def test_overlong_fields_end_on_a_word(self):
+        long_note = ' '.join(['capacity'] * 60)
+        bad = copy.deepcopy(GOOD); bad['checks']['fit']['note'] = long_note; bad['next_step'] = long_note
+        r = review.parse(json.dumps(bad))
+        note = r['checks']['fit'][1]
+        self.assertTrue(note.endswith('capacity...'), note[-20:]); self.assertLessEqual(len(note), 300)
+        self.assertTrue(r['next_step'].endswith('capacity...'))
+
+    def test_risks_capped_at_three(self):
+        self.assertEqual(len(review.parse(json.dumps(dict(GOOD, risks=['a', 'b', 'c', 'd'])))['risks']), 3)
+
+    def test_prompt_sets_brevity_and_voice(self):
+        self.assertIn('ONE sentence under 160 characters', review.INSTRUCTIONS)
+        self.assertIn('Address the reader as "you"', review.INSTRUCTIONS)
+
+
 if __name__ == '__main__':
     unittest.main()

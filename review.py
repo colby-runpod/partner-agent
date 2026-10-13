@@ -106,6 +106,13 @@ active row (New, Actioned, In Review, Flagged, Follow Up) means it is already be
 and suggest no second handoff; a partner application on file means they are already in the
 application flow. Never invent history and never treat an empty lookup as proof of anything.
 
+Writing rules. The card is read by the partnerships team in Slack, so keep every field short and
+complete, never cut off: each check note is ONE sentence under 160 characters; summary and why are at
+most two sentences under 300 characters each; next_step is under 220 characters; at most 3 risks,
+each under 100 characters; source titles under 50 characters. Address the reader as "you" and never
+refer to Colby or any Runpod teammate by name as the decision-maker. Plain text only: no citation
+tags, no markdown, no quotation of long passages.
+
 Return exactly this JSON shape, plain strings, no markdown:
 {"company": "", "contact": "", "partnership_type": "<one of: %s>",
  "route": "<one of: %s>", "score": "<5|4|3|2|1|DQ>",
@@ -116,7 +123,7 @@ Return exactly this JSON shape, plain strings, no markdown:
             "potential": {"verdict": "...", "note": ""}},
  "summary": "<two sentences: who they are and what they want>",
  "why": "<two sentences: the reason for the score and decision>",
- "next_step": "", "risks": ["<up to 4 short items>"],
+ "next_step": "", "risks": ["<up to 3 short items>"],
  "sources": [{"title": "", "url": "https://..."}]}''' % (', '.join(TYPES), ', '.join(ROUTES))
 
 
@@ -290,8 +297,12 @@ class NotionHistory:
 
 
 def _clean(value, limit):
-    text = re.sub(r'\s+', ' ', str(value or '')).strip()[:limit]
+    text = re.sub(r'</?cite\b[^>]*>', '', str(value or ''))  # Web search citation markup.
     text = re.sub(r'<[@#!][^>]*>', '', text)  # No mentions or channel pings from the model.
+    text = re.sub(r'\s+', ' ', text).strip()
+    if len(text) > limit:  # Safety net only; the prompt asks for short fields.
+        cut = text[:limit - 3]
+        text = (cut.rsplit(' ', 1)[0] if ' ' in cut[limit // 2:] else cut).rstrip(' ,;:-') + '...'
     return html.escape(text, quote=False)
 
 
@@ -311,22 +322,22 @@ def parse(raw):
         'route': pick(data.get('route'), ROUTES, 'Review Needed'),
         'score': pick(str(data.get('score')), SCORES, None),
         'decision': pick(data.get('decision'), DECISIONS, None),
-        'summary': _clean(data.get('summary'), 500),
-        'why': _clean(data.get('why'), 500),
-        'next_step': _clean(data.get('next_step'), 300) or 'Review manually',
+        'summary': _clean(data.get('summary'), 600),
+        'why': _clean(data.get('why'), 600),
+        'next_step': _clean(data.get('next_step'), 400) or 'Review manually',
         'checks': {}, 'risks': [], 'sources': []}
     if not review['score'] or not review['decision']:
         raise ValueError('Review missing score or decision')
     for name in ('identity', 'company', 'fit', 'potential'):
         item = checks.get(name) if isinstance(checks.get(name), dict) else {}
-        review['checks'][name] = (pick(item.get('verdict'), VERDICTS, 'unverified'), _clean(item.get('note'), 220))
-    for risk in (data.get('risks') or [])[:4]:
-        if _clean(risk, 200):
-            review['risks'].append(_clean(risk, 200))
+        review['checks'][name] = (pick(item.get('verdict'), VERDICTS, 'unverified'), _clean(item.get('note'), 300))
+    for risk in (data.get('risks') or [])[:3]:
+        if _clean(risk, 160):
+            review['risks'].append(_clean(risk, 160))
     for source in (data.get('sources') or [])[:4]:
         url = str(source.get('url', '')) if isinstance(source, dict) else ''
         if re.fullmatch(r'https://[^\s<>|]{4,400}', url):
-            review['sources'].append((url, _clean(source.get('title'), 60) or 'source'))
+            review['sources'].append((url, _clean(source.get('title'), 70) or 'source'))
     return review
 
 
