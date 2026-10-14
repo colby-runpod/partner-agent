@@ -6,6 +6,7 @@ import json
 import tempfile
 import time
 import unittest
+import urllib.parse
 from unittest.mock import patch
 
 import review
@@ -711,6 +712,207 @@ class FeedbackTests(unittest.TestCase):
         review.Ledger(path).delivered('x', 'sent', '1.2')
         with sqlite3.connect(path) as db:
             self.assertIn('card_ts', [r[1] for r in db.execute('PRAGMA table_info(reviews)')])
+
+
+
+ICFG = dict(FCFG, interactive=True, notion_write=True, notion_intake='INTAKE')
+PROBE_GOOD = dict(GOOD, first_name='Demo', company_short='Example', probe_ask='which workload comes first',
+                  checks=dict(GOOD['checks'], identity={'verdict': 'partial'}), signals={'specific_motion': True})
+
+
+class FakeUI(FakeFb):
+    def __init__(self, *a):
+        super().__init__(*a); self.updates = []; self.ephemerals = []; self.posted_buttons = []
+    def post(self, event, text, buttons=None):
+        self.posted_buttons.append(buttons); self.last_posted_text = text
+        return super().post(event, text)
+    def update_card(self, channel, ts, text, buttons, notes): self.updates.append((channel, ts, buttons, list(notes)))
+    def ephemeral(self, event, text): self.ephemerals.append(text)
+
+
+class FakeNotion:
+    def __init__(self, existed=False, fail=False):
+        self.logged, self.drafts, self.existed, self.fail = [], [], existed, fail
+    def log(self, data, row):
+        if self.fail: raise ValueError('Notion HTTP 403')
+        self.logged.append((data['company'], row['ts'])); return 'https://www.notion.so/row1', 'pid1', self.existed
+    def request_draft(self, page_id, data, body): self.drafts.append((page_id, data['email'], body))
+
+
+def click(action, key='T1:CSUB:50.1', user='U1', ts='70.1'):
+    return dict(type='block_actions', team={'id': 'T1'}, api_app_id='A1', user={'id': user},
+                channel={'id': 'CSUB'}, message={'ts': '50.5'}, response_url='https://hooks.slack.com/actions/T1/1/abc',
+                actions=[{'action_id': action, 'value': key, 'action_ts': ts}])
+
+
+class ButtonTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name + '/q.db'); self.ledger = review.Ledger(self.store.path)
+        self.client = FakeUI()
+        r = review.parse(json.dumps(PROBE_GOOD)); r['email'], r['submitted'] = 'demo@example.com', '2026-10-13'
+        r['drafts'] = review.drafts(r, 'demo@example.com', SUBMITTED); self.client.last = r
+        self.store.enqueue(review.accept_review(BODY, ICFG))
+        review.process(self.store, self.store.next_job(), self.client, self.ledger, ICFG)
+
+    def act(self, action, notion=None, **kw):
+        ev = review.accept_action(click(action, **kw), ICFG); self.assertIsNotNone(ev); self.store.enqueue(ev)
+        review.process_action(self.store, self.store.next_job(), self.client, self.ledger, ICFG, notion)
+
+    def test_card_posted_with_buttons_and_recorded(self):
+        self.assertEqual(self.client.posted_buttons[0],
+                         [('log_notion', 'T1:CSUB:50.1'), ('draft_gmail', 'T1:CSUB:50.1'), ('park', 'T1:CSUB:50.1')])
+        row = self.ledger.review('T1:CSUB:50.1')
+        self.assertEqual(row['card_text'], 'card')
+        self.assertEqual(json.loads(row['data'])['email'], 'demo@example.com')
+
+    def test_no_buttons_when_not_interactive_or_notion_off(self):
+        self.assertEqual(review.action_buttons(dict(ICFG, interactive=False), {'key_for_buttons': 'k'}), [])
+        self.assertEqual(review.action_buttons(dict(ICFG, notion_write=False), {'key_for_buttons': 'k', 'email': 'x@y.z',
+                                               'drafts': [['Probe reply', 'hi']]}), [('park', 'k')])
+        self.assertEqual(review.action_buttons(ICFG, {'key_for_buttons': 'k', 'drafts': [['Draft for Dean (you send)', 'x']],
+                                                      'email': 'a@b.c'}), [('log_notion', 'k'), ('park', 'k')])
+
+    def test_blocks(self):
+        blocks = review.card_blocks('line\n' * 2000, [('park', 'k')], ['a note'])
+        self.assertTrue(all(len(b['text']['text']) <= 2900 for b in blocks if b['type'] == 'section'))
+        self.assertEqual(blocks[-2], {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': 'a note'}]})
+        self.assertEqual(blocks[-1]['elements'][0]['action_id'], 'park')
+        self.assertEqual(review.card_blocks('x', [('log_notion', 'k')])[-1]['elements'][0]['style'], 'primary')
+
+    def test_accept_action_filters(self):
+        self.assertEqual(review.accept_action(click('park'), ICFG)['action'], 'park')
+        self.assertIsNone(review.accept_action(click('park', user='UOTHER'), ICFG))
+        self.assertIsNone(review.accept_action(click('delete_everything'), ICFG))
+        self.assertIsNone(review.accept_action(click('park', key='not-a-key'), ICFG))
+        self.assertIsNone(review.accept_action(click('park'), dict(ICFG, interactive=False)))
+        bad = click('park'); bad['team'] = {'id': 'TOTHER'}
+        self.assertIsNone(review.accept_action(bad, ICFG))
+        odd = click('park'); odd['response_url'] = 'https://evil.example/x'
+        self.assertEqual(review.accept_action(odd, ICFG)['response_url'], '')
+
+    def test_signed_interaction_endpoint(self):
+        raw = urllib.parse.urlencode({'payload': json.dumps(click('park'))}).encode(); ts = str(int(time.time()))
+        sig = 'v0=' + hmac.new(b'secret', b'v0:' + ts.encode() + b':' + raw, hashlib.sha256).hexdigest()
+        def call(signature):
+            codes = []
+            env = {'PATH_INFO': '/slack/interactions', 'REQUEST_METHOD': 'POST', 'CONTENT_LENGTH': str(len(raw)),
+                   'HTTP_X_SLACK_REQUEST_TIMESTAMP': ts, 'HTTP_X_SLACK_SIGNATURE': signature, 'wsgi.input': io.BytesIO(raw)}
+            review.interactions(env, lambda code, headers: codes.append(code), ICFG, self.store)
+            return codes[0]
+        self.assertEqual(call('bad'), '401 Unauthorized')
+        self.assertEqual(call(sig), '200 OK')
+        self.assertEqual(json.loads(self.store.next_job()['payload'])['kind'], 'action')
+
+    def test_park(self):
+        self.act('park')
+        self.assertEqual(self.ledger.review('T1:CSUB:50.1')['parked_by'], 'U1')
+        ch, ts, buttons, notes = self.client.updates[0]
+        self.assertEqual((ch, ts, buttons), ('CSUB', '50.5', [])); self.assertIn('Parked by <@U1>', notes[0])
+        self.act('park', ts='70.2')
+        self.assertIn('already parked', self.client.ephemerals[0])
+
+    def test_log_in_notion_once(self):
+        notion = FakeNotion()
+        self.act('log_notion', notion)
+        self.assertEqual(notion.logged, [('Example Inc', '50.1')])
+        self.assertEqual(self.ledger.review('T1:CSUB:50.1')['notion_url'], 'https://www.notion.so/row1')
+        _, _, buttons, notes = self.client.updates[-1]
+        self.assertEqual([b[0] for b in buttons], ['draft_gmail', 'park'])
+        self.assertIn('Logged in Notion by <@U1>', notes[0])
+        self.act('log_notion', notion, ts='70.3')
+        self.assertEqual(len(notion.logged), 1); self.assertIn('Already logged', self.client.ephemerals[-1])
+
+    def test_existing_row_is_linked_not_duplicated(self):
+        self.act('log_notion', FakeNotion(existed=True))
+        self.assertIn('Already in Notion, linked', self.client.updates[-1][3][0])
+
+    def test_draft_in_gmail_logs_row_then_requests(self):
+        notion = FakeNotion()
+        self.act('draft_gmail', notion)
+        self.assertEqual(len(notion.logged), 1)
+        pid, email, body = notion.drafts[0]
+        self.assertEqual((pid, email), ('pid1', 'demo@example.com'))
+        self.assertTrue(body.startswith('Hi Demo-- thanks for submitting your partner request.'))
+        _, _, buttons, notes = self.client.updates[-1]
+        self.assertEqual([b[0] for b in buttons], ['park']); self.assertIn('Gmail draft requested', notes[-1])
+
+    def test_notion_off_and_failures_change_nothing(self):
+        self.act('log_notion', None)
+        self.assertIn('turned off', self.client.ephemerals[-1])
+        self.act('log_notion', FakeNotion(fail=True), ts='70.4')
+        self.assertIn("didn't go through", self.client.ephemerals[-1])
+        self.assertIsNone(self.ledger.review('T1:CSUB:50.1')['notion_url']); self.assertEqual(self.client.updates, [])
+
+    def test_unknown_review(self):
+        self.act('park', key='T1:CSUB:99.9')
+        self.assertIn("can't find that review", self.client.ephemerals[-1])
+
+
+class NotionWriterTests(unittest.TestCase):
+    def data(self, **over):
+        r = review.parse(json.dumps(dict(PROBE_GOOD, **over)))
+        r['email'], r['submitted'] = 'demo@example.com', '2026-10-13'
+        r['drafts'] = review.drafts(r, 'demo@example.com', SUBMITTED)
+        return {k: (list(map(list, v)) if k == 'drafts' else v) for k, v in r.items()}
+
+    def test_properties_triage_and_dq(self):
+        w = review.NotionWriter(ICFG)
+        p = w.properties(self.data(), 'tpa:CSUB:50.1')
+        self.assertEqual((p['Status']['select']['name'], p['Intake Stage']['select']['name'],
+                          p['Qualification Score']['select']['name'], p['Quality']['select']['name'],
+                          p['Suggested Next Step']['select']['name'], p['Email']['email']),
+                         ('New', 'Triaging', '3', 'Medium', 'Draft email reply', 'demo@example.com'))
+        self.assertEqual(p['Partnership Type'], {'multi_select': [{'name': 'Reseller/VAR'}]})
+        self.assertIn('**IDENTITY:** partial', p['Quality Notes']['rich_text'][0]['text']['content'])
+        self.assertNotIn('Qualification Decision Date', p)
+        dq = w.properties(self.data(signals={'spam': True}), 'tpa:x')
+        self.assertEqual((dq['Status']['select']['name'], dq['Intake Stage']['select']['name'],
+                          dq['Suggested Next Step']['select']['name']), ('DQ', 'Disqualified', 'No action'))
+        self.assertIn('Qualification Decision Date', dq)
+        self.assertTrue(dq['Quality Notes']['rich_text'][0]['text']['content'].startswith('DQ reason:'))
+
+    @patch.dict('os.environ', {'NOTION_TOKEN': 'secret_x'})
+    def test_log_finds_before_creating(self):
+        w = review.NotionWriter(ICFG); calls = []
+        def fake(method, path, payload=None):
+            calls.append((method, path, payload))
+            if path.endswith('/query'):
+                return {'results': [{'url': 'https://www.notion.so/old', 'id': 'old1'}]} if len(calls) == 1 else {'results': []}
+            return {'url': 'https://www.notion.so/new', 'id': 'new1'}
+        w._req = fake
+        self.assertEqual(w.log(self.data(), {'channel': 'CSUB', 'ts': '50.1'}), ('https://www.notion.so/old', 'old1', True))
+        flt = calls[0][2]['filter']['or']
+        self.assertEqual(flt[0], {'property': 'Intake Ref', 'rich_text': {'equals': 'tpa:CSUB:50.1'}})
+        self.assertEqual(flt[1]['and'][1], {'property': 'Submitted', 'date': {'on_or_after': '2026-10-10'}})
+        self.assertEqual(w.log(self.data(), {'channel': 'CSUB', 'ts': '50.1'}), ('https://www.notion.so/new', 'new1', False))
+        self.assertEqual(calls[-1][:2], ('POST', 'pages'))
+        self.assertEqual(calls[-1][2]['parent'], {'type': 'data_source_id', 'data_source_id': 'INTAKE'})
+
+    def test_request_draft_uses_next_step_notes(self):
+        w = review.NotionWriter(ICFG); calls = []
+        w._req = lambda m, p, payload=None: calls.append((m, p, payload)) or {}
+        w.request_draft('pid1', {'email': 'demo@example.com'}, 'Hi Demo-- hello')
+        m, path, payload = calls[0]
+        self.assertEqual((m, path), ('PATCH', 'pages/pid1'))
+        note = payload['properties']['Next Step Notes']['rich_text'][0]['text']['content']
+        self.assertIn('Create a Gmail draft to demo@example.com', note); self.assertIn('Hi Demo-- hello', note)
+        self.assertEqual(payload['properties']['Suggested Next Step'], {'select': {'name': 'Draft email reply'}})
+
+    @patch('review.urllib.request.urlopen')
+    def test_ephemeral_uses_response_url_only(self, urlopen):
+        c = review.ReviewClients(ICFG)
+        c.ephemeral({'response_url': ''}, 'x'); urlopen.assert_not_called()
+        c.ephemeral({'response_url': 'https://hooks.slack.com/actions/T1/1/abc'}, 'hello')
+        req = urlopen.call_args.args[0]
+        self.assertEqual(json.loads(req.data), {'response_type': 'ephemeral', 'replace_original': False, 'text': 'hello'})
+
+    @patch.dict('os.environ', {'SLACK_BOT_TOKEN': 'xoxb-test'})
+    @patch('review.api', return_value={'ts': '9.9'})
+    def test_post_with_buttons_sends_blocks(self, api):
+        ts = review.ReviewClients(dict(ICFG, review_mode='thread')).post(review.accept_review(BODY, ICFG), 'card', [('park', 'k')])
+        sent = api.call_args.args[2]
+        self.assertEqual(ts, '9.9'); self.assertEqual(sent['blocks'][-1]['type'], 'actions'); self.assertEqual(sent['text'], 'card')
 
 
 if __name__ == '__main__':
