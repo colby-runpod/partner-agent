@@ -13,6 +13,55 @@ Notion pipeline is still the only thing that writes those records.
 Chat mentions keep working. When `REVIEW_ENABLED=true`, `review.py` runs both
 features on the same queue and worker.
 
+## How the call is made
+
+Claude researches the submission and reports evidence: four checks (identity,
+company, fit, potential) and a set of yes/no signals, such as a specific
+motion, a named customer, quantified volume, spam or a blocker. It doesn't
+pick the label. `decide()` in `review.py` applies the intake rules to those
+facts, so the same facts always get the same score and decision:
+
+- **DQ:** spam. **1:** a legitimate sender at the wrong door. **2:** an
+  unverified person, company or fit, or supply below the bar.
+- **5:** all four checks verified. **4:** identity, company and fit verified.
+  **3:** anything else.
+- 4 and 5 are **pursue**. A 3 is **pursue** only with a named customer, real
+  volume or a warm intro, **triage** with a specific motion or a notable
+  counterparty, and **do not pursue** otherwise.
+- A blocker (for example sanctions) or "already in play" turns pursue into
+  **triage**. Self-serve routes become **point to self-serve**. A blank or
+  unusable ask is always **triage**, never a DQ.
+
+To change a rule, change one line in `decide()` and its test.
+
+## Drafts on the card
+
+Each card can carry copy-ready text in the same voice the Notion pipeline
+uses:
+
+- **Probe reply:** one question, for triage and pursue cases.
+- **Invitation:** for 4s and 5s on the Partnerships route. Send it from
+  partners@runpod.io once you approve.
+- **Pointer reply:** the startup program, or the referral and affiliate
+  program.
+- **Draft for Dean:** supply leads, in the 3c format. You send it.
+- **Decline:** not drafted. The card only notes the date a soft decline
+  becomes eligible, 7 days after submission.
+
+The first line of every card is a one-line summary (decision, score, route,
+headline), so the thread preview tells you the call.
+
+## Daily summary and alerts
+
+On weekdays at `SUMMARY_HOUR` (default 17) US Mountain time, the bot posts to
+`SUMMARY_CHANNEL_ID` (default #team-partner-biz-dev). The summary has a
+count by decision, one linked line per submission and a *Needs attention*
+section. If a review fails, or a card may not have posted, the bot alerts that
+channel right away. Set `ANTHROPIC_KEY_EXPIRES=YYYY-MM-DD` to get a key
+reminder in the summary during the last 14 days. The summary posts at most
+once a day and is never retried. Records are kept in `chat.sqlite3` on the
+`/data` volume.
+
 ## Modes
 
 - `REVIEW_MODE=shadow` (default) posts each card to #team-partnerships-development
@@ -84,8 +133,9 @@ expect more "unverified".
   never resent automatically.
 - Work is serial. A review takes roughly 30-90 seconds, and chat mentions wait
   behind it.
-- `/healthz` shows `review_enabled`, `review_mode`, `web_search` and
-  `notion_lookup`, so you can check the live settings at a glance.
+- `/healthz` shows `review_enabled`, `review_mode`, `web_search`,
+  `notion_lookup`, `summary_enabled` and `summary_hour`.
+- The instructions are prompt-cached, which lowers the cost of each review.
 - Railway logs print `Review queued digest <ts>` for each digest picked up. A
   digest-looking post from an unexpected bot prints its `bot_id` so you can add
   it to `REVIEW_BOT_IDS`. No message content is logged.

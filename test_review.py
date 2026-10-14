@@ -16,7 +16,8 @@ DIGEST = ('*PARTNERSHIP MQL DIGEST*\n*Source form:* Runpod Partner Program: Runp
           '*Latest partnership response:*\n- Ask: reseller partnership for EU customers.')
 CFG = dict(team_id='T1', app_id='A1', secret='secret', enabled=True, channels={'C1'}, users={'U1'},
            chat_enabled=True, review_enabled=True, review_channels={'CSUB'}, review_bots={'BHUB'},
-           review_mode='shadow', shadow_channel='CSHADOW', web_search=True)
+           review_mode='shadow', shadow_channel='CSHADOW', web_search=True, summary_channel='CSUM',
+           summary_enabled=True, summary_hour=17, key_expires='')
 BODY = dict(type='event_callback', team_id='T1', api_app_id='A1', event_id='Ev9', event=dict(
     type='message', channel='CSUB', bot_id='BHUB', ts='50.1', text=DIGEST))
 MENTION = dict(type='event_callback', team_id='T1', api_app_id='A1', event_id='Ev1', event=dict(
@@ -93,7 +94,7 @@ class FilterTests(unittest.TestCase):
 class CardTests(unittest.TestCase):
     def test_render_good_review(self):
         card = review.render(review.parse('Here you go: ' + json.dumps(GOOD) + ' done'))
-        for part in ['*Partner review · Example Inc*', '*Route* Partnerships', '*Score* 4',
+        for part in [':large_green_circle: Pursue  ·  Score 4  ·  Partnerships', '*Partner review · Example Inc*',
                      'Pursue', 'Identity: verified - LinkedIn matches', 'Invite to apply',
                      '<https://example.com/registry|Registry>', 'Advisory only']:
             self.assertIn(part, card)
@@ -115,9 +116,10 @@ class CardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review.parse('no json here')
         with self.assertRaises(ValueError):
-            review.parse(json.dumps(dict(GOOD, score='7')))
-        with self.assertRaises(ValueError):
-            review.parse(json.dumps(dict(GOOD, decision='maybe')))
+            review.parse(json.dumps({k: v for k, v in GOOD.items() if k != 'checks'}))
+        # A score or decision from the model is ignored; the rules decide.
+        r = review.parse(json.dumps(dict(GOOD, score='1', decision='do_not_pursue')))
+        self.assertEqual((r['score'], r['decision']), ('4', 'pursue'))
 
     def test_newlines_inside_strings_are_tolerated(self):
         raw = json.dumps(GOOD).replace('Real company, clear motion.', 'Real company,\nclear motion.')
@@ -167,10 +169,11 @@ class ClientTests(unittest.TestCase):
                                                        {'type': 'text', 'text': json.dumps(GOOD)[40:]}]}
         self.respond(urlopen, paused, done)
         card = review.ReviewClients(CFG).review(review.accept_review(BODY, CFG))
-        self.assertIn('*Score* 4', card)
+        self.assertIn('Score 4', card)
         first, second = [json.loads(c.args[0].data) for c in urlopen.call_args_list]
         self.assertEqual(first['tools'][0]['type'], 'web_search_20250305')
-        self.assertEqual(first['system'], review.INSTRUCTIONS)
+        self.assertEqual(first['system'], [{'type': 'text', 'text': review.INSTRUCTIONS,
+                                            'cache_control': {'type': 'ephemeral'}}])
         self.assertEqual(second['messages'][-1], {'role': 'assistant', 'content': paused['content']})
 
     @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'k', 'ANTHROPIC_MODEL': 'claude-test'})
@@ -378,7 +381,8 @@ class HistoryTests(unittest.TestCase):
 
 class DiagnosticsTests(unittest.TestCase):
     @patch('review.config', return_value=dict(CFG, review_enabled=True, review_mode='shadow', web_search=True,
-                                               notion_lookup=False, chat_enabled=False))
+                                               notion_lookup=False, chat_enabled=False, summary_enabled=True,
+                                               summary_hour=17))
     def test_healthz_reports_review_state(self, _):
         with tempfile.TemporaryDirectory() as d, patch.dict('os.environ', {'CHAT_DB': d + '/q.db'}):
             app = review.create_app(); out = []
@@ -414,8 +418,189 @@ class PolishTests(unittest.TestCase):
         self.assertEqual(len(review.parse(json.dumps(dict(GOOD, risks=['a', 'b', 'c', 'd'])))['risks']), 3)
 
     def test_prompt_sets_brevity_and_voice(self):
-        self.assertIn('ONE sentence under 160 characters', review.INSTRUCTIONS)
+        self.assertIn('ONE sentence under 160 characters', ' '.join(review.INSTRUCTIONS.split()))
         self.assertIn('Address the reader as "you"', review.INSTRUCTIONS)
+
+
+
+def checks(i='verified', c='verified', f='verified', p='unverified'):
+    return {n: (v, '') for n, v in zip(('identity', 'company', 'fit', 'potential'), (i, c, f, p))}
+
+
+def sig(**on):
+    base = {n: False for n in review.SIGNALS}; base['blocker'] = ''
+    base.update(on); return base
+
+
+class DecideTests(unittest.TestCase):
+    def test_scores(self):
+        self.assertEqual(review.decide(checks(p='verified'), sig(), 'Partnerships'), ('5', 'pursue'))
+        self.assertEqual(review.decide(checks(), sig(), 'Partnerships'), ('4', 'pursue'))
+        self.assertEqual(review.decide(checks(f='partial'), sig(), 'Partnerships'), ('3', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(i='unverified'), sig(), 'Partnerships'), ('2', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(), sig(spam=True), 'Partnerships'), ('DQ', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(), sig(wrong_door=True), 'Partnerships'), ('1', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(), sig(below_supply_bar=True), 'Supply Team'), ('2', 'do_not_pursue'))
+
+    def test_score_three_paths(self):
+        three = checks(i='partial')
+        self.assertEqual(review.decide(three, sig(named_customer=True), 'Partnerships')[1], 'pursue')
+        self.assertEqual(review.decide(three, sig(quantified_volume=True), 'Partnerships')[1], 'pursue')
+        self.assertEqual(review.decide(three, sig(specific_motion=True), 'Partnerships')[1], 'triage')
+        self.assertEqual(review.decide(three, sig(notable_counterparty=True), 'Partnerships')[1], 'triage')
+        self.assertEqual(review.decide(three, sig(), 'Partnerships')[1], 'do_not_pursue')
+
+    def test_overrides(self):
+        self.assertEqual(review.decide(checks(), sig(blocker='sanctions check'), 'Partnerships'), ('4', 'triage'))
+        self.assertEqual(review.decide(checks(), sig(already_in_play=True), 'Partnerships'), ('4', 'triage'))
+        self.assertEqual(review.decide(checks(i='unverified'), sig(ask_unusable=True), 'Partnerships'), ('2', 'triage'))
+        self.assertEqual(review.decide(checks(f='partial'), sig(), 'Startup Program'), ('3', 'redirect'))
+        self.assertEqual(review.decide(checks(), sig(wrong_door=True), 'Influencer/Creator'), ('1', 'redirect'))
+        self.assertEqual(review.decide(checks(i='unverified'), sig(), 'Influencer/Creator'), ('2', 'do_not_pursue'))
+
+    def test_same_facts_same_call(self):
+        raw = json.dumps(dict(GOOD, signals={'specific_motion': True}))
+        self.assertEqual(len({(review.parse(raw)['score'], review.parse(raw)['decision']) for _ in range(5)}), 1)
+
+
+SUBMITTED = review.dt.datetime(2026, 10, 13, 15, 0)
+
+
+class DraftTests(unittest.TestCase):
+    def make(self, **over):
+        data = copy.deepcopy(GOOD); data.update(first_name='Demo', company_short='Example', **over)
+        return review.parse(json.dumps(data))
+
+    def test_probe_for_triage(self):
+        r = self.make(checks=dict(GOOD['checks'], identity={'verdict': 'partial'}), signals={'specific_motion': True},
+                      probe_ask='which customer workload would come first?')
+        (label, text), = review.drafts(r, 'demo@example.com', SUBMITTED)
+        self.assertEqual(label, 'Probe reply')
+        self.assertEqual(text, 'Hi Demo-- thanks for submitting your partner request.\n\nI dug a little more into Example'
+                               ' - would you mind sharing which customer workload would come first?\n\nColby')
+
+    def test_invite_for_pursue_four(self):
+        (label, text), = review.drafts(self.make(), 'demo@example.com', SUBMITTED)
+        self.assertIn('partners@runpod.io', label)
+        self.assertIn('invite Example to apply', text); self.assertTrue(text.startswith('Hi Demo,'))
+
+    def test_pointer_for_self_serve(self):
+        (label, text), = review.drafts(self.make(route='Startup Program', checks=dict(GOOD['checks'], fit={'verdict': 'partial'})),
+                                       'd@x.com', SUBMITTED)
+        self.assertEqual(label, 'Pointer reply'); self.assertIn('runpod.io/startup-program', text)
+        (label, text), = review.drafts(self.make(route='Influencer/Creator'), 'd@x.com', SUBMITTED)
+        self.assertIn('referral-and-affiliate-program', text); self.assertIn('rather than up front', text)
+
+    def test_dean_draft_for_supply(self):
+        r = self.make(route='Supply Team', region='US, Texas', dean_motion='Offers 200 RTX PRO 6000 GPUs (their claim).')
+        (label, text), = review.drafts(r, 'ops@site.com', SUBMITTED)
+        self.assertEqual(label, 'Draft for Dean (you send)')
+        self.assertIn('Hey Dean -- passing along a supply-side infra lead.\nQuick details:\n\n* Company: Example', text)
+        self.assertIn('* Email: `ops@site.com`', text); self.assertIn('* Region: US, Texas', text)
+        self.assertEqual(review.drafts(r, '', SUBMITTED), [])
+
+    def test_decline_waits_seven_days(self):
+        r = self.make(signals={'wrong_door': True})
+        (label, text), = review.drafts(r, 'd@x.com', SUBMITTED)
+        self.assertEqual(label, 'Decline'); self.assertIn('Oct 20', text)
+        unverified = self.make(checks=dict(GOOD['checks'], identity={'verdict': 'unverified'}))
+        self.assertEqual(review.drafts(unverified, 'd@x.com', SUBMITTED), [])
+
+    def test_card_shows_draft_in_code_block_and_no_action_for_dnp(self):
+        r = self.make(signals={'wrong_door': True})
+        card = review.render(r, None, review.drafts(r, 'd@x.com', SUBMITTED))
+        self.assertIn('*Suggested next step:* No action.', card)
+        r = self.make()
+        card = review.render(r, None, review.drafts(r, 'd@x.com', SUBMITTED))
+        self.assertIn(':memo: *Invitation', card); self.assertIn('```Hi Demo,', card)
+
+    def test_headline_and_blocker_on_card(self):
+        r = self.make(headline='Probe on owned sites', signals={'blocker': 'Check 1260H exposure'})
+        card = review.render(r)
+        self.assertTrue(card.startswith(':large_yellow_circle: Needs triage  ·  Score 4  ·  Partnerships  ·  Probe on owned sites'))
+        self.assertIn(':octagonal_sign: *Clear first:* Check 1260H exposure', card)
+
+
+class FakeSay(Fake):
+    def __init__(self, *a):
+        super().__init__(*a); self.said = []
+    def say(self, channel, text): self.said.append((channel, text))
+    def permalink(self, channel, ts): return 'https://slack.example/%s/%s' % (channel, ts)
+
+
+class LedgerSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name + '/q.db'); self.ledger = review.Ledger(self.store.path)
+
+    def test_process_records_and_alerts(self):
+        e = review.accept_review(BODY, CFG); self.store.enqueue(e)
+        client = FakeSay(ValueError('x'))
+        review.process(self.store, self.store.next_job(), client, self.ledger, CFG)
+        rows = self.ledger.since(0)
+        self.assertEqual((rows[0]['outcome'], rows[0]['delivered']), ('failed', 'sent'))
+        self.assertEqual(client.said[0][0], 'CSUM'); self.assertIn('A review failed', client.said[0][1])
+
+    def test_successful_review_recorded_from_last(self):
+        e = review.accept_review(BODY, CFG); self.store.enqueue(e)
+        client = FakeSay(); client.last = review.parse(json.dumps(dict(GOOD, headline='Invite once approved')))
+        review.process(self.store, self.store.next_job(), client, self.ledger, CFG)
+        row = self.ledger.since(0)[0]
+        self.assertEqual((row['company'], row['decision'], row['score'], row['headline']),
+                         ('Example Inc', 'pursue', '4', 'Invite once approved'))
+        self.assertEqual(client.said, [])
+
+    def test_unconfirmed_post_alerts(self):
+        e = review.accept_review(BODY, CFG); self.store.enqueue(e); client = FakeSay()
+        def fail(ev, t): raise TimeoutError()
+        client.post = fail
+        review.process(self.store, self.store.next_job(), client, self.ledger, CFG)
+        self.assertEqual(self.ledger.since(0)[0]['delivered'], 'unconfirmed')
+        self.assertIn('may not have posted', client.said[0][1])
+
+    def test_mountain_time_dst(self):
+        self.assertEqual(review.mountain(review.dt.datetime(2026, 10, 13, 23, 0)).hour, 17)   # MDT
+        self.assertEqual(review.mountain(review.dt.datetime(2026, 12, 1, 0, 0)).hour, 17)     # MST
+        self.assertEqual(review.mountain(review.dt.datetime(2026, 11, 1, 7, 59)).hour, 1)     # before fall back
+        self.assertEqual(review.mountain(review.dt.datetime(2026, 11, 1, 9, 0)).hour, 2)      # after fall back
+
+    def test_summary_once_per_weekday_after_hour(self):
+        client = FakeSay()
+        before = review.dt.datetime(2026, 10, 13, 22, 59)  # 4:59pm MDT Tue
+        after = review.dt.datetime(2026, 10, 13, 23, 1)
+        saturday = review.dt.datetime(2026, 10, 17, 23, 30)
+        self.assertFalse(review.run_summary(CFG, self.ledger, client, before))
+        self.assertTrue(review.run_summary(CFG, self.ledger, client, after))
+        self.assertFalse(review.run_summary(CFG, self.ledger, client, after))
+        self.assertFalse(review.run_summary(CFG, self.ledger, client, saturday))
+        self.assertEqual(len(client.said), 1); self.assertIn('No new submissions', client.said[0][1])
+        self.assertFalse(review.run_summary(dict(CFG, summary_enabled=False), review.Ledger(self.tmp.name + '/x.db'),
+                                            client, after))
+
+    def test_summary_content(self):
+        e = review.accept_review(BODY, CFG)
+        self.ledger.record('k1', e, review.parse(json.dumps(dict(GOOD, headline='Invite once approved'))), 'ok')
+        self.ledger.record('k2', dict(e, thread_ts='51.1'), None, 'failed')
+        text = review.build_summary(dict(CFG, key_expires='2026-11-06'), self.ledger.since(0), FakeSay(),
+                                    review.dt.datetime(2026, 10, 23, 23, 30))
+        self.assertIn('*Partner submissions · Fri Oct 23*', text)
+        self.assertIn('1 reviewed: :large_green_circle: Pursue 1', text)
+        self.assertIn(':large_green_circle: <https://slack.example/CSUB/50.1|Example Inc>  ·  Partnerships  ·  Invite once approved', text)
+        self.assertIn('*Needs attention*', text); self.assertIn('review failed', text)
+        self.assertIn('expires in 14 days', text)
+        self.assertNotIn('expires', review.build_summary(dict(CFG, key_expires='2026-12-31'), [], FakeSay(),
+                                                         review.dt.datetime(2026, 10, 23, 23, 30)))
+
+    def test_config_summary_and_key_settings(self):
+        env = {'REVIEW_ENABLED': 'true', 'SLACK_BOT_TOKEN': 'x', 'ANTHROPIC_API_KEY': 'k', 'ANTHROPIC_MODEL': 'm'}
+        with patch('chat.load_config', return_value={}):
+            with patch.dict('os.environ', env, clear=True):
+                cfg = review.config()
+            self.assertEqual((cfg['summary_hour'], cfg['summary_channel'], cfg['summary_enabled']), (17, 'C0C7R970C5T', True))
+            with patch.dict('os.environ', dict(env, ANTHROPIC_KEY_EXPIRES='Nov 6'), clear=True):
+                with self.assertRaises(ValueError): review.config()
+            with patch.dict('os.environ', dict(env, SUMMARY_HOUR='25'), clear=True):
+                with self.assertRaises(ValueError): review.config()
 
 
 if __name__ == '__main__':
