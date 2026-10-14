@@ -19,6 +19,11 @@ intake rows and partner applications. Read-only.
 
 Daily summary: weekdays at SUMMARY_HOUR (default 17) US Mountain time, posted to
 SUMMARY_CHANNEL_ID. Failed reviews and unconfirmed posts alert there at once.
+
+Feedback: react :+1: or :-1: on a card, or reply in its thread with
+"@Team Partner Agent should be triage" (pursue, triage, self-serve, do not
+pursue). Each is logged, and on Fridays the summary adds a weekly look at
+where the bot and the team disagreed.
 """
 import datetime as dt
 import html
@@ -55,6 +60,12 @@ FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.
              'gmx.com', 'gmx.de', 'web.de', 'mail.com', 'mail.ru', 'yandex.ru', 'yandex.com', 'qq.com',
              '163.com', '126.com', 'naver.com', 'zoho.com', 'fastmail.com', 'hushmail.com', 'tutanota.com'}
 NOTION_VERSION = '2025-09-03'
+UP, DOWN = {'+1', 'thumbsup'}, {'-1', 'thumbsdown'}
+CORRECTION = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*(?:should\s+be|correct(?:ion)?\s*:?|actually)\s+'
+                        r'(pursue|triage|self[- ]serve|redirect|do\s+not\s+pursue|dnp|no)\b', re.I)
+CORRECTION_WORDS = {'pursue': 'pursue', 'triage': 'triage', 'self-serve': 'redirect', 'self serve': 'redirect',
+                    'redirect': 'redirect', 'do not pursue': 'do_not_pursue', 'dnp': 'do_not_pursue',
+                    'no': 'do_not_pursue'}
 URL = re.compile(r'https://[^\s<>|]{4,400}')
 
 INSTRUCTIONS = '''You are Team Partner Agent, Runpod's partnerships reviewer. You receive one HubSpot
@@ -165,6 +176,8 @@ def config():
     cfg['summary_enabled'] = os.environ.get('SUMMARY_ENABLED', 'true') != 'false'
     cfg['summary_hour'] = int(os.environ.get('SUMMARY_HOUR', '17'))
     cfg['key_expires'] = os.environ.get('ANTHROPIC_KEY_EXPIRES', '')  # YYYY-MM-DD, optional
+    cfg['bot_user'] = os.environ.get('REVIEW_BOT_USER_ID', 'U0C7372ET45')  # Team Partner Agent's own user
+    cfg['feedback_users'] = _ids('FEEDBACK_USER_IDS') or cfg['users']  # Who can vote and correct
     cfg['web_search'] = os.environ.get('REVIEW_WEB_SEARCH', 'true') != 'false'
     cfg['notion_intake'] = os.environ.get('REVIEW_NOTION_INTAKE_ID', 'ffecfb43-625c-42c6-a6af-1f8951641bba')
     cfg['notion_apps'] = os.environ.get('REVIEW_NOTION_APPS_ID', '3e3ff732-fc34-807e-8b49-000bf49490ca')
@@ -236,8 +249,41 @@ def accept_manual(body, cfg):
                 channel=e['channel'], ts=ts, thread_ts=thread, user=e['user'], text='')
 
 
+def accept_feedback(body, cfg):
+    """A reaction on one of our cards, or a correction reply in a reviewed thread."""
+    e = body.get('event', {})
+    if not cfg.get('review_enabled'):
+        return None
+    if body.get('team_id') != cfg['team_id'] or body.get('api_app_id') != cfg['app_id'] or not body.get('event_id'):
+        return None
+    if e.get('user') not in (cfg.get('feedback_users') or cfg.get('users', set())):
+        return None
+    channels = cfg['review_channels'] | {cfg['shadow_channel']}
+    if e.get('type') in ('reaction_added', 'reaction_removed'):
+        item = e.get('item') or {}
+        name = str(e.get('reaction', '')).split('::')[0]
+        if item.get('type') != 'message' or item.get('channel') not in channels or e.get('item_user') != cfg.get('bot_user'):
+            return None
+        if name not in UP | DOWN or not re.fullmatch(r'\d+\.\d+', item.get('ts', '')):
+            return None
+        return dict(kind='feedback', event_id=body['event_id'], key='fb:' + body['event_id'], channel=item['channel'],
+                    card_ts=item['ts'], user=e['user'], vote='up' if name in UP else 'down',
+                    removed=e['type'] == 'reaction_removed')
+    if e.get('type') == 'app_mention' and not e.get('subtype') and not e.get('bot_id'):
+        thread, ts = e.get('thread_ts'), e.get('ts', '')
+        match = CORRECTION.match(e.get('text', ''))
+        if e.get('channel') not in channels or not thread or thread == ts or not match:
+            return None
+        if not re.fullmatch(r'\d+\.\d+', thread) or not re.fullmatch(r'\d+\.\d+', ts):
+            return None
+        word = re.sub(r'\s+', ' ', match.group(1).lower())
+        return dict(kind='feedback', event_id=body['event_id'], key='fb:' + body['event_id'], channel=e['channel'],
+                    thread_ts=thread, ts=ts, user=e['user'], vote='correct', value=CORRECTION_WORDS[word])
+    return None
+
+
 def accept(body, cfg):
-    event = accept_manual(body, cfg)
+    event = accept_manual(body, cfg) or accept_feedback(body, cfg)
     if event:
         return event
     if cfg.get('chat_enabled'):
@@ -531,6 +577,10 @@ class Ledger:
                 key TEXT PRIMARY KEY, channel TEXT, ts TEXT, created REAL, company TEXT, route TEXT,
                 score TEXT, decision TEXT, headline TEXT, outcome TEXT, delivered TEXT)''')
             db.execute('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)')
+            db.execute('''CREATE TABLE IF NOT EXISTS feedback (
+                id TEXT PRIMARY KEY, review_key TEXT, user TEXT, vote TEXT, value TEXT, created REAL)''')
+            if 'card_ts' not in [r['name'] for r in db.execute('PRAGMA table_info(reviews)')]:
+                db.execute('ALTER TABLE reviews ADD COLUMN card_ts TEXT')
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=5)
@@ -540,14 +590,43 @@ class Ledger:
     def record(self, key, event, review, outcome, now=None):
         r = review or {}
         with self._db() as db:
-            db.execute('INSERT OR REPLACE INTO reviews VALUES (?,?,?,?,?,?,?,?,?,?,?)', (
+            db.execute('INSERT OR REPLACE INTO reviews (key, channel, ts, created, company, route, score, '
+                       'decision, headline, outcome, delivered) VALUES (?,?,?,?,?,?,?,?,?,?,?)', (
                 key, event['channel'], event['thread_ts'], now or time.time(), html.unescape(r.get('company', '')),
                 r.get('route', ''), r.get('score', ''), r.get('decision', ''),
                 html.unescape(r.get('headline', '')), outcome, 'pending'))
 
-    def delivered(self, key, state):
+    def delivered(self, key, state, card_ts=None):
         with self._db() as db:
-            db.execute('UPDATE reviews SET delivered=? WHERE key=?', (state, key))
+            db.execute('UPDATE reviews SET delivered=?, card_ts=COALESCE(?, card_ts) WHERE key=?', (state, card_ts, key))
+
+    def find(self, card_ts=None, channel=None, thread_ts=None):
+        """The latest successful review behind a card, or behind a digest thread."""
+        with self._db() as db:
+            if card_ts:
+                row = db.execute("SELECT * FROM reviews WHERE card_ts=? AND outcome='ok'", (card_ts,)).fetchone()
+            else:
+                row = db.execute("SELECT * FROM reviews WHERE ts=? AND outcome='ok' ORDER BY created DESC LIMIT 1",
+                                 (thread_ts,)).fetchone()
+            return dict(row) if row else None
+
+    def feedback(self, fid, review_key, user, vote, value='', now=None):
+        with self._db() as db:
+            if vote in ('up', 'down'):  # One vote per person per card; the latest wins.
+                db.execute("DELETE FROM feedback WHERE review_key=? AND user=? AND vote IN ('up','down')",
+                           (review_key, user))
+            db.execute('INSERT OR REPLACE INTO feedback VALUES (?,?,?,?,?,?)',
+                       (fid, review_key, user, vote, value, now or time.time()))
+
+    def unvote(self, review_key, user, vote):
+        with self._db() as db:
+            db.execute('DELETE FROM feedback WHERE review_key=? AND user=? AND vote=?', (review_key, user, vote))
+
+    def feedback_since(self, t):
+        with self._db() as db:
+            return [dict(r) for r in db.execute(
+                'SELECT f.*, r.company, r.decision, r.channel, r.ts FROM feedback f JOIN reviews r '
+                'ON r.key = f.review_key WHERE f.created>=? ORDER BY f.created', (t,))]
 
     def since(self, t):
         with self._db() as db:
@@ -663,7 +742,12 @@ class ReviewClients:
         else:
             message.update(channel=self.cfg['shadow_channel'], text='Shadow review of <%s|this submission>\n\n%s'
                            % (self.permalink(event['channel'], event['ts']), text))
-        api('https://slack.com/api/chat.postMessage', token, message)
+        return api('https://slack.com/api/chat.postMessage', token, message).get('ts')
+
+    def say_thread(self, channel, thread_ts, text):
+        api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
+            {'channel': channel, 'thread_ts': thread_ts, 'text': text, 'parse': 'none',
+             'unfurl_links': False, 'unfurl_media': False})
 
 
 FAILED = ('I could not complete a review of this submission. Check the Anthropic key, model and web '
@@ -722,8 +806,9 @@ def process(store, job, clients, ledger=None, cfg=None):
     job = store.get(key)
     if job['reply'] and job['reply_state'] == 'pending':
         store.update(key, reply_state='sending')
+        card_ts = None
         try:
-            clients.post(event, job['reply'])
+            card_ts = clients.post(event, job['reply'])
         except Exception:
             # Never resend automatically: delivery may have happened.
             store.update(key, reply_state='review', error='reply_unconfirmed')
@@ -736,9 +821,74 @@ def process(store, job, clients, ledger=None, cfg=None):
             state = 'sent'
         if ledger:
             try:
-                ledger.delivered(key, state)
+                ledger.delivered(key, state, card_ts if isinstance(card_ts, str) else None)
             except Exception:
                 print('Review ledger write failed.', flush=True)
+
+
+LABELS = {'pursue': 'pursue', 'triage': 'triage', 'redirect': 'self-serve', 'do_not_pursue': 'do not pursue'}
+
+
+def process_feedback(store, job, clients, ledger):
+    """Log a vote or correction against its review. Corrections get a one-line ack in the thread."""
+    event, key = json.loads(job['payload']), job['key']
+    store.update(key, state='done')
+    try:
+        if event['vote'] == 'correct':
+            row = ledger.find(thread_ts=event['thread_ts'])
+        else:
+            row = ledger.find(card_ts=event['card_ts'])
+        if not row:
+            return  # Not one of our reviewed cards; nothing to log.
+        if event.get('removed'):
+            ledger.unvote(row['key'], event['user'], event['vote'])
+            return
+        ledger.feedback(key, row['key'], event['user'], event['vote'], event.get('value', ''))
+    except Exception:
+        print('Feedback could not be logged.', flush=True)
+        return
+    if event['vote'] == 'correct':
+        same = event['value'] == row['decision']
+        text = ('Noted, that matches my call.' if same else 'Noted: logged as %s (I said %s). It will show in '
+                "Friday's review." % (LABELS[event['value']], LABELS.get(row['decision'], row['decision'])))
+        store.update(key, reply=text, reply_state='sending')
+        try:
+            clients.say_thread(event['channel'], event['thread_ts'], text)
+        except Exception:
+            store.update(key, reply_state='review', error='reply_unconfirmed')
+        else:
+            store.update(key, reply_state='sent')
+
+
+def build_weekly(rows, feedback, clients):
+    """Where the bot and the team agreed and disagreed this week."""
+    ok = [r for r in rows if r['outcome'] == 'ok']
+    ups = sum(1 for f in feedback if f['vote'] == 'up')
+    downs = [f for f in feedback if f['vote'] == 'down']
+    fixes = [f for f in feedback if f['vote'] == 'correct' and f['value'] != f['decision']]
+    lines = ['*Weekly review check*', '%d reviewed this week  ·  :+1: %d  ·  :-1: %d  ·  corrected %d'
+             % (len(ok), ups, len(downs), len(fixes))]
+    judged = {f['review_key'] for f in feedback}
+    if judged:
+        wrong = {f['review_key'] for f in downs} | {f['review_key'] for f in fixes}
+        lines.append('Agreement on the %d you weighed in on: %d%%' % (len(judged), round(100 * (1 - len(wrong) / len(judged)))))
+    if fixes:
+        pairs = {}
+        for f in fixes:
+            pairs[(f['decision'], f['value'])] = pairs.get((f['decision'], f['value']), 0) + 1
+        lines += ['', '*Corrections*']
+        for f in fixes:
+            lines.append('• %s: I said %s, you said %s' % (_link(clients, f['channel'], f['ts'], f['company'] or 'submission'),
+                                                            LABELS.get(f['decision'], f['decision']), LABELS[f['value']]))
+        (said, meant), n = max(pairs.items(), key=lambda kv: kv[1])
+        if n >= 2:
+            lines += ['', 'Most common miss: %s when you wanted %s (%d times). Worth a rule change in decide().'
+                      % (LABELS.get(said, said), LABELS[meant], n)]
+    if downs and not fixes:
+        lines += ['', 'Thumbs-down without a correction: reply "@Team Partner Agent should be <call>" so the miss is specific.']
+    if not feedback:
+        lines += ['', 'No feedback yet. React :+1: or :-1: on a card, or reply "@Team Partner Agent should be triage".']
+    return '\n'.join(lines)
 
 
 def summary_due(cfg, ledger, now_utc):
@@ -788,6 +938,15 @@ def run_summary(cfg, ledger, clients, now_utc=None):
         clients.say(cfg['summary_channel'], build_summary(cfg, ledger.since(start), clients, now_utc))
     except Exception:
         print('Daily summary could not be posted.', flush=True)
+    week = '%d-W%02d' % local.isocalendar()[:2]
+    if local.weekday() == 4 and ledger.get('weekly_week') != week:  # Fridays, once per ISO week.
+        week_start = time.time() - 7 * 86400
+        ledger.put('weekly_week', week)
+        try:
+            clients.say(cfg['summary_channel'], build_weekly(ledger.since(week_start), ledger.feedback_since(week_start),
+                                                             clients))
+        except Exception:
+            print('Weekly review check could not be posted.', flush=True)
     return True
 
 
@@ -809,6 +968,8 @@ def worker():
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients, ledger, cfg)
+            elif json.loads(job['payload']).get('kind') == 'feedback':
+                process_feedback(store, job, review_clients, ledger)
             else:
                 chat.process(store, job, chat_clients)
 

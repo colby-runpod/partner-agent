@@ -603,5 +603,115 @@ class LedgerSummaryTests(unittest.TestCase):
                 with self.assertRaises(ValueError): review.config()
 
 
+
+FCFG = dict(CFG, bot_user='UBOT')
+REACT = dict(type='event_callback', team_id='T1', api_app_id='A1', event_id='EvR', event=dict(
+    type='reaction_added', user='U1', reaction='+1', item_user='UBOT', item=dict(type='message', channel='CSUB', ts='50.5')))
+FIX = dict(type='event_callback', team_id='T1', api_app_id='A1', event_id='EvF', event=dict(
+    type='app_mention', channel='CSUB', user='U1', ts='50.9', thread_ts='50.1', text='<@UBOT> should be triage'))
+
+
+class FakeFb(FakeSay):
+    def __init__(self, *a):
+        super().__init__(*a); self.thread_said = []
+    def say_thread(self, channel, thread_ts, text): self.thread_said.append((channel, thread_ts, text))
+    def post(self, event, text):
+        super().post(event, text); return '50.5'
+
+
+class FeedbackTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name + '/q.db'); self.ledger = review.Ledger(self.store.path)
+        e = review.accept_review(BODY, FCFG); self.store.enqueue(e)
+        self.client = FakeFb(); self.client.last = review.parse(json.dumps(GOOD))  # pursue, score 4
+        review.process(self.store, self.store.next_job(), self.client, self.ledger, FCFG)
+
+    def run_event(self, body):
+        ev = review.accept(body, FCFG); self.assertIsNotNone(ev); self.store.enqueue(ev)
+        review.process_feedback(self.store, self.store.next_job(), self.client, self.ledger)
+        return ev
+
+    def test_card_ts_recorded(self):
+        self.assertEqual(self.ledger.find(card_ts='50.5')['decision'], 'pursue')
+
+    def test_filters(self):
+        self.assertEqual(review.accept_feedback(REACT, FCFG)['vote'], 'up')
+        for change in [dict(item_user='USOMEONE'), dict(reaction='tada'), dict(user='UOTHER'),
+                       dict(item=dict(type='message', channel='COTHER', ts='50.5'))]:
+            b = copy.deepcopy(REACT); b['event'].update(change)
+            self.assertIsNone(review.accept_feedback(b, FCFG), change)
+        b = copy.deepcopy(REACT); b['event']['reaction'] = '-1::skin-tone-2'
+        self.assertEqual(review.accept_feedback(b, FCFG)['vote'], 'down')
+        self.assertIsNone(review.accept_feedback(REACT, dict(FCFG, review_enabled=False)))
+        team = dict(FCFG, feedback_users={'U1', 'UTANYA'})
+        b = copy.deepcopy(REACT); b['event']['user'] = 'UTANYA'
+        self.assertIsNotNone(review.accept_feedback(b, team)); self.assertIsNone(review.accept_feedback(b, FCFG))
+
+    def test_correction_parsing_and_precedence(self):
+        for text, value in [('<@UBOT> should be triage', 'triage'), ('<@UBOT> actually do not pursue', 'do_not_pursue'),
+                            ('<@UBOT> correction: self-serve', 'redirect'), ('<@UBOT> should be dnp', 'do_not_pursue')]:
+            b = copy.deepcopy(FIX); b['event']['text'] = text
+            self.assertEqual(review.accept(b, FCFG)['value'], value, text)
+        b = copy.deepcopy(FIX); b['event']['text'] = '<@UBOT> what do you think?'
+        self.assertIsNone(review.accept_feedback(b, FCFG))
+        b = copy.deepcopy(FIX); b['event']['text'] = '<@UBOT> review'
+        self.assertEqual(review.accept(b, FCFG)['kind'], 'review_manual')
+
+    def test_votes_one_per_person_latest_wins_and_removal(self):
+        self.run_event(REACT)
+        b = copy.deepcopy(REACT); b['event_id'] = 'EvR2'; b['event']['reaction'] = 'thumbsdown'
+        self.run_event(b)
+        votes = self.ledger.feedback_since(0)
+        self.assertEqual([f['vote'] for f in votes], ['down'])
+        b = copy.deepcopy(b); b['event_id'] = 'EvR3'; b['event']['type'] = 'reaction_removed'
+        self.run_event(b)
+        self.assertEqual(self.ledger.feedback_since(0), [])
+
+    def test_correction_logged_and_acked(self):
+        self.run_event(FIX)
+        f = self.ledger.feedback_since(0)[0]
+        self.assertEqual((f['vote'], f['value'], f['decision']), ('correct', 'triage', 'pursue'))
+        self.assertEqual(self.client.thread_said[0][:2], ('CSUB', '50.1'))
+        self.assertIn('logged as triage (I said pursue)', self.client.thread_said[0][2])
+
+    def test_unknown_card_ignored(self):
+        b = copy.deepcopy(REACT); b['event']['item']['ts'] = '99.9'
+        self.run_event(b)
+        self.assertEqual(self.ledger.feedback_since(0), [])
+
+    def test_weekly_report(self):
+        self.run_event(FIX)
+        e = review.accept_review(BODY, FCFG)
+        self.ledger.record('k2', dict(e, thread_ts='60.1'), review.parse(json.dumps(GOOD)), 'ok')
+        self.ledger.feedback('f2', 'k2', 'U1', 'correct', 'triage')
+        rows, fb = self.ledger.since(0), self.ledger.feedback_since(0)
+        text = review.build_weekly(rows, fb, self.client)
+        self.assertIn('2 reviewed this week  ·  :+1: 0  ·  :-1: 0  ·  corrected 2', text)
+        self.assertIn('Agreement on the 2 you weighed in on: 0%', text)
+        self.assertIn('I said pursue, you said triage', text)
+        self.assertIn('Most common miss: pursue when you wanted triage (2 times)', text)
+        self.assertIn('No feedback yet', review.build_weekly(rows, [], self.client))
+
+    def test_weekly_posts_fridays_once(self):
+        client = FakeFb(); ledger = review.Ledger(self.tmp.name + '/w.db')
+        friday = review.dt.datetime(2026, 10, 16, 23, 30)
+        review.run_summary(FCFG, ledger, client, friday)
+        self.assertEqual(len(client.said), 2); self.assertIn('*Weekly review check*', client.said[1][1])
+        ledger.put('summary_date', '')  # force another daily pass the same week
+        review.run_summary(FCFG, ledger, client, friday)
+        self.assertEqual(sum('Weekly review check' in t for _, t in client.said), 1)
+
+    def test_old_ledger_gets_card_ts_column(self):
+        import sqlite3
+        path = self.tmp.name + '/old.db'
+        with sqlite3.connect(path) as db:
+            db.execute('CREATE TABLE reviews (key TEXT PRIMARY KEY, channel TEXT, ts TEXT, created REAL, company TEXT, '
+                       'route TEXT, score TEXT, decision TEXT, headline TEXT, outcome TEXT, delivered TEXT)')
+        review.Ledger(path).delivered('x', 'sent', '1.2')
+        with sqlite3.connect(path) as db:
+            self.assertIn('card_ts', [r[1] for r in db.execute('PRAGMA table_info(reviews)')])
+
+
 if __name__ == '__main__':
     unittest.main()
