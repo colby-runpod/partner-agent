@@ -35,6 +35,14 @@ facts, so the same facts always get the same score and decision:
 
 To change a rule, change one line in `decide()` and its test.
 
+## Re-reviews
+
+If a submission already has a review (for example, you ask for a manual
+review in its thread), the new card says on its second line whether the call
+matches the earlier one. If it changed, it gives the old score and decision
+and which checks moved, so you can pick the call you agree with or reply with
+a correction.
+
 ## Drafts on the card
 
 Each card can carry copy-ready text in the same voice the Notion pipeline

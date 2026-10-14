@@ -497,7 +497,7 @@ class DraftTests(unittest.TestCase):
         (label, text), = review.drafts(r, 'ops@site.com', SUBMITTED)
         self.assertEqual(label, 'Draft for Dean (you send)')
         self.assertIn('Hey Dean -- passing along a supply-side infra lead.\nQuick details:\n\n* Company: Example', text)
-        self.assertIn('* Email: `ops@site.com`', text); self.assertIn('* Region: US, Texas', text)
+        self.assertIn('* Email: ops@site.com\n', text); self.assertNotIn('`', text); self.assertIn('* Region: US, Texas', text)
         self.assertEqual(review.drafts(r, '', SUBMITTED), [])
 
     def test_decline_waits_seven_days(self):
@@ -513,7 +513,7 @@ class DraftTests(unittest.TestCase):
         self.assertIn('*Suggested next step:* No action.', card)
         r = self.make()
         card = review.render(r, None, review.drafts(r, 'd@x.com', SUBMITTED))
-        self.assertIn(':memo: *Invitation', card); self.assertIn('```Hi Demo,', card)
+        self.assertIn(':memo: *Invitation', card); self.assertIn('```\nHi Demo,', card)
 
     def test_headline_and_blocker_on_card(self):
         r = self.make(headline='Probe on owned sites', signals={'blocker': 'Check 1260H exposure'})
@@ -776,7 +776,8 @@ class ButtonTests(unittest.TestCase):
     def test_blocks(self):
         blocks = review.card_blocks('line\n' * 2000, [('park', 'k')], ['a note'])
         self.assertTrue(all(len(b['text']['text']) <= 2900 for b in blocks if b['type'] == 'section'))
-        self.assertEqual(blocks[-2], {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': 'a note'}]})
+        self.assertEqual(blocks[-2], {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': 'a note', 'verbatim': True}]})
+        self.assertTrue(all(b['text']['verbatim'] for b in blocks if b['type'] == 'section'))
         self.assertEqual(blocks[-1]['elements'][0]['action_id'], 'park')
         self.assertEqual(review.card_blocks('x', [('log_notion', 'k')])[-1]['elements'][0]['style'], 'primary')
 
@@ -917,3 +918,53 @@ class NotionWriterTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ConsistencyTests(unittest.TestCase):
+    """A re-review says whether it agrees with the earlier call, and the drafts stay copy-ready."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name + '/q.db'); self.ledger = review.Ledger(self.store.path)
+        self.event = dict(channel='CSUB', ts='50.1', thread_ts='50.1')
+
+    def earlier(self, score, decision, potential):
+        r = review.parse(json.dumps(GOOD))
+        r.update(score=score, decision=decision)
+        r['checks'] = dict(r['checks'], potential=[potential, ''])
+        self.ledger.record('T1:CSUB:50.1', self.event, r, 'ok', now=1791943621)
+
+    def now(self, score, decision, potential):
+        c = Fake('top line\n\n*Partner review*'); c.last = review.parse(json.dumps(GOOD))
+        c.last.update(score=score, decision=decision)
+        c.last['checks'] = dict(c.last['checks'], potential=[potential, ''])
+        return review.with_prior('top line\n\n*Partner review*', self.ledger, c, self.event)
+
+    def test_no_prior_leaves_card_alone(self):
+        self.assertEqual(self.now('3', 'triage', 'partial'), 'top line\n\n*Partner review*')
+
+    def test_changed_call_says_what_moved(self):
+        self.earlier('2', 'do_not_pursue', 'unverified')
+        text = self.now('3', 'triage', 'partial')
+        first, second = text.split('\n')[:2]
+        self.assertEqual(first, 'top line')
+        self.assertIn('*Changed from the earlier review (Oct 13):* that one said Score 2, do not pursue.', second)
+        self.assertIn('Potential went from unverified to partial.', second)
+
+    def test_changed_with_same_checks_blames_signals(self):
+        self.earlier('2', 'do_not_pursue', 'partial')
+        self.assertIn('checks match', self.now('3', 'triage', 'partial'))
+
+    def test_same_call(self):
+        self.earlier('3', 'triage', 'partial')
+        self.assertIn(':repeat: Same call as the earlier review (Oct 13).', self.now('3', 'triage', 'partial'))
+
+    def test_process_adds_line_on_rereview(self):
+        self.earlier('2', 'do_not_pursue', 'unverified')
+        self.store.enqueue(dict(review.accept_review(BODY, CFG), key='again'))
+        c = Fake('top\n\nbody'); c.last = review.parse(json.dumps(GOOD))
+        review.process(self.store, self.store.next_job(), c, self.ledger, CFG)
+        self.assertIn('Changed from the earlier review', c.posted[0][1])
+
+    def test_draft_ending_in_backtick_stays_fenced(self):
+        card = review.render(review.parse(json.dumps(GOOD)), None, [('Probe reply', 'see `x`')])
+        self.assertIn("```\nsee 'x'\n```", card)
