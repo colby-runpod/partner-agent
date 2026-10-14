@@ -24,6 +24,12 @@ Feedback: react :+1: or :-1: on a card, or reply in its thread with
 "@Team Partner Agent should be triage" (pursue, triage, self-serve, do not
 pursue). Each is logged, and on Fridays the summary adds a weekly look at
 where the bot and the team disagreed.
+
+Buttons (INTERACTIVE_ENABLED=true, Slack interactivity pointed at
+/slack/interactions): Log in Notion creates the intake row, or links the one
+that already exists; Draft in Gmail asks the scheduled pipeline, through Next
+Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
+aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
 import datetime as dt
 import html
@@ -37,7 +43,7 @@ import urllib.parse
 import urllib.request
 
 import chat
-from intake import Application, Store, api, flatten
+from intake import Application, Store, api, flatten, verify
 
 DIGEST_MARKERS = ('PARTNERSHIP MQL DIGEST', 'Incoming Partnership Request')
 ROUTES = ('Partnerships', 'Supply Team', 'Sales', 'Events/Sponsorship', 'Influencer/Creator',
@@ -60,6 +66,8 @@ FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.
              'gmx.com', 'gmx.de', 'web.de', 'mail.com', 'mail.ru', 'yandex.ru', 'yandex.com', 'qq.com',
              '163.com', '126.com', 'naver.com', 'zoho.com', 'fastmail.com', 'hushmail.com', 'tutanota.com'}
 NOTION_VERSION = '2025-09-03'
+ACTIONS = {'log_notion': 'Log in Notion', 'draft_gmail': 'Draft in Gmail', 'park': 'Park'}
+GMAIL_DRAFTS = ('Probe reply', 'Pointer reply')
 UP, DOWN = {'+1', 'thumbsup'}, {'-1', 'thumbsdown'}
 CORRECTION = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*(?:should\s+be|correct(?:ion)?\s*:?|actually)\s+'
                         r'(pursue|triage|self[- ]serve|redirect|do\s+not\s+pursue|dnp|no)\b', re.I)
@@ -177,7 +185,9 @@ def config():
     cfg['summary_hour'] = int(os.environ.get('SUMMARY_HOUR', '17'))
     cfg['key_expires'] = os.environ.get('ANTHROPIC_KEY_EXPIRES', '')  # YYYY-MM-DD, optional
     cfg['bot_user'] = os.environ.get('REVIEW_BOT_USER_ID', 'U0C7372ET45')  # Team Partner Agent's own user
-    cfg['feedback_users'] = _ids('FEEDBACK_USER_IDS') or cfg['users']  # Who can vote and correct
+    cfg['feedback_users'] = _ids('FEEDBACK_USER_IDS') or cfg['users']  # Who can vote, correct and click
+    cfg['interactive'] = os.environ.get('INTERACTIVE_ENABLED') == 'true'
+    cfg['notion_write'] = os.environ.get('NOTION_WRITE') == 'true' and bool(os.environ.get('NOTION_TOKEN'))
     cfg['web_search'] = os.environ.get('REVIEW_WEB_SEARCH', 'true') != 'false'
     cfg['notion_intake'] = os.environ.get('REVIEW_NOTION_INTAKE_ID', 'ffecfb43-625c-42c6-a6af-1f8951641bba')
     cfg['notion_apps'] = os.environ.get('REVIEW_NOTION_APPS_ID', '3e3ff732-fc34-807e-8b49-000bf49490ca')
@@ -303,11 +313,61 @@ def create_app():
                                'review_enabled': cfg['review_enabled'], 'review_mode': cfg['review_mode'],
                                'web_search': cfg['web_search'], 'notion_lookup': cfg['notion_lookup'],
                                'summary_enabled': cfg['summary_enabled'], 'summary_hour': cfg['summary_hour'],
+                               'interactive': cfg.get('interactive', False),
+                               'notion_write': cfg.get('notion_write', False),
                                'intake_enabled': False}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
+        if env.get('PATH_INFO') == '/slack/interactions' and env.get('REQUEST_METHOD') == 'POST':
+            return interactions(env, start, cfg, app.store)
         return app(env, start)
     return wsgi
+
+
+def interactions(env, start, cfg, store):
+    """Button clicks. Signed like events, queued, and acknowledged within Slack's 3 seconds."""
+    def respond(code):
+        start(code, [('Content-Type', 'text/plain'), ('Content-Length', '0')])
+        return [b'']
+    try:
+        size = int(env.get('CONTENT_LENGTH') or 0)
+        if size <= 0 or size > 262144:
+            return respond('413 Payload Too Large')
+        raw = env['wsgi.input'].read(size)
+        if not verify(cfg['secret'], env.get('HTTP_X_SLACK_REQUEST_TIMESTAMP'), env.get('HTTP_X_SLACK_SIGNATURE'), raw):
+            return respond('401 Unauthorized')
+        payload = json.loads(urllib.parse.parse_qs(raw.decode())['payload'][0])
+        event = accept_action(payload, cfg)
+        if event:
+            store.enqueue(event)
+        return respond('200 OK')
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return respond('400 Bad Request')
+    except sqlite3.Error:
+        return respond('503 Service Unavailable')
+
+
+def accept_action(payload, cfg):
+    if not (cfg.get('review_enabled') and cfg.get('interactive')) or payload.get('type') != 'block_actions':
+        return None
+    if (payload.get('team') or {}).get('id') != cfg['team_id'] or payload.get('api_app_id') != cfg['app_id']:
+        return None
+    user = (payload.get('user') or {}).get('id')
+    if user not in (cfg.get('feedback_users') or cfg.get('users', set())):
+        print('Button click ignored from a user outside FEEDBACK_USER_IDS.', flush=True)
+        return None
+    action = (payload.get('actions') or [{}])[0]
+    channel, message = (payload.get('channel') or {}).get('id'), payload.get('message') or {}
+    value, action_ts = str(action.get('value', '')), str(action.get('action_ts', ''))
+    if action.get('action_id') not in ACTIONS or not re.fullmatch(r'T\w+:C\w+:\d+\.\d+', value):
+        return None
+    if not channel or not re.fullmatch(r'\d+\.\d+', message.get('ts', '')) or not re.fullmatch(r'\d+\.\d+', action_ts):
+        return None
+    response_url = payload.get('response_url', '')
+    key = 'act:%s:%s' % (action_ts, user)
+    return dict(kind='action', event_id=key, key=key, action=action['action_id'], review_key=value, user=user,
+                channel=channel, message_ts=message['ts'],
+                response_url=response_url if re.fullmatch(r'https://hooks\.slack\.com/[\w/.-]+', response_url) else '')
 
 
 def digest_fields(text):
@@ -579,8 +639,10 @@ class Ledger:
             db.execute('CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)')
             db.execute('''CREATE TABLE IF NOT EXISTS feedback (
                 id TEXT PRIMARY KEY, review_key TEXT, user TEXT, vote TEXT, value TEXT, created REAL)''')
-            if 'card_ts' not in [r['name'] for r in db.execute('PRAGMA table_info(reviews)')]:
-                db.execute('ALTER TABLE reviews ADD COLUMN card_ts TEXT')
+            have = [r['name'] for r in db.execute('PRAGMA table_info(reviews)')]
+            for column in ('card_ts', 'data', 'card_text', 'notion_url', 'notion_id', 'notes', 'parked_by'):
+                if column not in have:
+                    db.execute('ALTER TABLE reviews ADD COLUMN %s TEXT' % column)
 
     def _db(self):
         db = sqlite3.connect(self.path, timeout=5)
@@ -595,10 +657,31 @@ class Ledger:
                 key, event['channel'], event['thread_ts'], now or time.time(), html.unescape(r.get('company', '')),
                 r.get('route', ''), r.get('score', ''), r.get('decision', ''),
                 html.unescape(r.get('headline', '')), outcome, 'pending'))
+            if review:
+                keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
+                                               'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
+                                               'next_step', 'headline')}
+                keep['checks'] = r.get('checks', {})
+                keep['drafts'] = [list(d) for d in r.get('drafts', [])]
+                keep['blocker'] = (r.get('signals') or {}).get('blocker', '')
+                db.execute('UPDATE reviews SET data=? WHERE key=?', (json.dumps(keep), key))
 
     def delivered(self, key, state, card_ts=None):
         with self._db() as db:
             db.execute('UPDATE reviews SET delivered=?, card_ts=COALESCE(?, card_ts) WHERE key=?', (state, card_ts, key))
+
+    def review(self, key):
+        with self._db() as db:
+            row = db.execute('SELECT * FROM reviews WHERE key=?', (key,)).fetchone()
+            return dict(row) if row else None
+
+    def mark(self, key, **fields):
+        allowed = {'card_text', 'notion_url', 'notion_id', 'notes', 'parked_by'}
+        if not fields or not set(fields) <= allowed:
+            raise ValueError('Invalid ledger field')
+        with self._db() as db:
+            db.execute('UPDATE reviews SET %s WHERE key=?' % ', '.join(k + '=?' for k in fields),
+                       list(fields.values()) + [key])
 
     def find(self, card_ts=None, channel=None, thread_ts=None):
         """The latest successful review behind a card, or behind a digest thread."""
@@ -719,6 +802,7 @@ class ReviewClients:
         email, _ = digest_fields(event['text'])
         submitted = dt.datetime.utcfromtimestamp(float(event['thread_ts']))
         result['drafts'] = drafts(result, email, submitted)
+        result['email'], result['submitted'] = email, submitted.strftime('%Y-%m-%d')
         self.last = result
         return render(result, history, result['drafts'])
 
@@ -730,7 +814,7 @@ class ReviewClients:
         api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
             {'channel': channel, 'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False})
 
-    def post(self, event, text):
+    def post(self, event, text, buttons=None):
         token = os.environ['SLACK_BOT_TOKEN']
         message = {'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False}
         if event.get('kind') == 'review_manual':
@@ -742,7 +826,24 @@ class ReviewClients:
         else:
             message.update(channel=self.cfg['shadow_channel'], text='Shadow review of <%s|this submission>\n\n%s'
                            % (self.permalink(event['channel'], event['ts']), text))
+        if buttons:
+            message['blocks'] = card_blocks(message['text'], buttons)
+        self.last_posted_text = message['text']
         return api('https://slack.com/api/chat.postMessage', token, message).get('ts')
+
+    def update_card(self, channel, ts, text, buttons, notes):
+        api('https://slack.com/api/chat.update', os.environ['SLACK_BOT_TOKEN'],
+            {'channel': channel, 'ts': ts, 'text': text, 'blocks': card_blocks(text, buttons, notes)})
+
+    def ephemeral(self, event, text):
+        if not event.get('response_url'):
+            return
+        request = urllib.request.Request(event['response_url'], headers={'Content-Type': 'application/json'},
+            data=json.dumps({'response_type': 'ephemeral', 'replace_original': False, 'text': text}).encode())
+        try:
+            urllib.request.urlopen(request, timeout=10).read()
+        except (OSError, ValueError):
+            print('Ephemeral reply could not be sent.', flush=True)
 
     def say_thread(self, channel, thread_ts, text):
         api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
@@ -806,9 +907,13 @@ def process(store, job, clients, ledger=None, cfg=None):
     job = store.get(key)
     if job['reply'] and job['reply_state'] == 'pending':
         store.update(key, reply_state='sending')
-        card_ts = None
+        card_ts, buttons = None, []
+        if cfg and ledger and cfg.get('interactive'):
+            row = ledger.review(key)
+            buttons = (action_buttons(cfg, dict(json.loads(row['data'] or '{}'), key_for_buttons=key))
+                       if row and row['outcome'] == 'ok' else [])
         try:
-            card_ts = clients.post(event, job['reply'])
+            card_ts = clients.post(event, job['reply'], buttons) if buttons else clients.post(event, job['reply'])
         except Exception:
             # Never resend automatically: delivery may have happened.
             store.update(key, reply_state='review', error='reply_unconfirmed')
@@ -822,8 +927,204 @@ def process(store, job, clients, ledger=None, cfg=None):
         if ledger:
             try:
                 ledger.delivered(key, state, card_ts if isinstance(card_ts, str) else None)
+                text = getattr(clients, 'last_posted_text', None)
+                if isinstance(text, str):
+                    ledger.mark(key, card_text=text)
             except Exception:
                 print('Review ledger write failed.', flush=True)
+
+
+def card_blocks(text, buttons, notes=()):
+    """Slack blocks for a card: the text in sections under 3,000 characters, notes, then buttons."""
+    blocks, chunk = [], ''
+    for line in text.split('\n'):
+        while len(line) > 2900:
+            blocks.append(line[:2900]); line = line[2900:]
+        if len(chunk) + len(line) + 1 > 2900:
+            blocks.append(chunk); chunk = ''
+        chunk = chunk + '\n' + line if chunk else line
+    if chunk:
+        blocks.append(chunk)
+    out = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': b}} for b in blocks if b.strip()][:45]
+    for note in notes:
+        out.append({'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': note}]})
+    if buttons:
+        out.append({'type': 'actions', 'elements': [
+            dict({'type': 'button', 'action_id': aid, 'value': value, 'text': {'type': 'plain_text', 'text': ACTIONS[aid]}},
+                 **({'style': 'primary'} if aid == 'log_notion' else {})) for aid, value in buttons]})
+    return out
+
+
+def gmail_draft(data):
+    for label, text in data.get('drafts') or []:
+        if label in GMAIL_DRAFTS:
+            return text
+    return ''
+
+
+def action_buttons(cfg, data, done=()):
+    """[(action_id, review key)] for a card. Notion buttons need NOTION_WRITE."""
+    if not cfg.get('interactive') or not data.get('key_for_buttons'):
+        return []
+    key, out = data['key_for_buttons'], []
+    if cfg.get('notion_write') and 'log_notion' not in done:
+        out.append(('log_notion', key))
+    if cfg.get('notion_write') and data.get('email') and gmail_draft(data) and 'draft_gmail' not in done:
+        out.append(('draft_gmail', key))
+    if 'park' not in done:
+        out.append(('park', key))
+    return out
+
+
+def _rich(text):
+    text = str(text or '')
+    return [{'type': 'text', 'text': {'content': text[i:i + 1800]}} for i in range(0, len(text), 1800)][:50]
+
+
+class NotionWriter:
+    """Creates intake rows on a button click and passes Gmail draft requests to the pipeline."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def _req(self, method, path, payload=None):
+        request = urllib.request.Request('https://api.notion.com/v1/' + path, method=method, headers={
+            'Authorization': 'Bearer ' + os.environ['NOTION_TOKEN'], 'Notion-Version': NOTION_VERSION,
+            'Content-Type': 'application/json'}, data=json.dumps(payload).encode() if payload is not None else None)
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            raise ValueError('Notion HTTP %d' % exc.code) from None
+        except (OSError, ValueError):
+            raise ValueError('Notion unavailable') from None
+
+    def find(self, ref, email, submitted):
+        terms = [{'property': 'Intake Ref', 'rich_text': {'equals': ref}}]
+        if email:
+            since = (dt.date.fromisoformat(submitted) - dt.timedelta(days=3)).isoformat()
+            terms.append({'and': [{'property': 'Email', 'email': {'equals': email}},
+                                  {'property': 'Submitted', 'date': {'on_or_after': since}}]})
+        rows = self._req('POST', 'data_sources/%s/query' % self.cfg['notion_intake'],
+                         {'filter': {'or': terms}, 'page_size': 1}).get('results', [])
+        return (rows[0]['url'], rows[0]['id']) if rows else None
+
+    def properties(self, data, ref):
+        decision, score, today = data.get('decision'), data.get('score'), dt.date.today().isoformat()
+        checks = data.get('checks') or {}
+        notes = ['%s - Team Partner Agent review (%s)' % (today, ref)]
+        if decision == 'do_not_pursue':
+            notes.insert(0, 'DQ reason: %s' % html.unescape(data.get('why') or 'see review'))
+        for name in ('identity', 'company', 'fit', 'potential'):
+            verdict, note = (checks.get(name) or ['unverified', ''])[:2]
+            notes.append('**%s:** %s%s' % (name.upper(), verdict, (' - ' + html.unescape(note)) if note else ''))
+        notes.append('**SCORE:** %s. Decision: %s.' % (score, LABELS.get(decision, decision)))
+        if data.get('blocker'):
+            notes.append('**CLEAR FIRST:** ' + html.unescape(data['blocker']))
+        step = {'do_not_pursue': 'No action', 'redirect': 'Point to resource'}.get(decision) or (
+            'Route to supply' if data.get('route') == 'Supply Team' else
+            'Route to sales' if data.get('route') == 'Sales' else
+            'Draft email reply' if gmail_draft(data) else 'Flag for review')
+        props = {
+            'Contact': {'title': _rich(html.unescape(data.get('contact') or 'Unknown'))},
+            'Company': {'rich_text': _rich(html.unescape(data.get('company') or ''))},
+            'Source': {'select': {'name': 'Slack Form'}},
+            'Relationship Origin': {'select': {'name': 'Inbound'}},
+            'Intake Ref': {'rich_text': _rich(ref)},
+            'Submitted': {'date': {'start': data.get('submitted') or today}},
+            'Request Summary': {'rich_text': _rich(html.unescape(data.get('summary') or ''))},
+            'Qualification Score': {'select': {'name': score}},
+            'Quality': {'select': {'name': 'High' if score in ('4', '5') else 'Medium' if score == '3' else 'Low'}},
+            'Partnership Type': {'multi_select': [{'name': data.get('partnership_type') or 'Misrouted / Other'}]},
+            'Forward To': {'select': {'name': data.get('route') or 'Review Needed'}},
+            'Status': {'select': {'name': 'DQ' if decision == 'do_not_pursue' else 'New'}},
+            'Intake Stage': {'select': {'name': {'do_not_pursue': 'Disqualified', 'redirect': 'Routed Internally'}.get(
+                decision, 'Triaging')}},
+            'Suggested Next Step': {'select': {'name': step}},
+            'Quality Notes': {'rich_text': _rich('\n'.join(notes))},
+            'Draft / Resource': {'rich_text': _rich('Logged by Team Partner Agent on %s from its review card. '
+                                                    'Nothing drafted or sent yet.' % today)}}
+        if data.get('email'):
+            props['Email'] = {'email': data['email']}
+        if decision == 'do_not_pursue':
+            props['Qualification Decision Date'] = {'date': {'start': today}}
+        return props
+
+    def log(self, data, row):
+        """(url, page id, existed). Never creates a second row for the same submission."""
+        ref = 'tpa:%s:%s' % (row['channel'], row['ts'])
+        hit = self.find(ref, data.get('email', ''), data.get('submitted') or dt.date.today().isoformat())
+        if hit:
+            return hit[0], hit[1], True
+        page = self._req('POST', 'pages', {'parent': {'type': 'data_source_id', 'data_source_id': self.cfg['notion_intake']},
+                                           'properties': self.properties(data, ref)})
+        return page['url'], page['id'], False
+
+    def request_draft(self, page_id, data, body):
+        note = ('Create a Gmail draft to %s with the subject "Your Runpod partner request" and exactly this body, adding '
+                'the standard signature, then record it with the usual draft hygiene and clear this note:\n\n%s\n\n'
+                '(Requested from the Team Partner Agent card on %s.)' % (data['email'], body, dt.date.today().isoformat()))
+        self._req('PATCH', 'pages/%s' % page_id, {'properties': {
+            'Next Step Notes': {'rich_text': _rich(note)},
+            'Suggested Next Step': {'select': {'name': 'Draft email reply'}}}})
+
+
+def process_action(store, job, clients, ledger, cfg, notion=None):
+    """Run one button click, then refresh the card so it shows what happened and by whom."""
+    event, key = json.loads(job['payload']), job['key']
+    store.update(key, state='done')
+    row = ledger.review(event['review_key'])
+    if not row or not row.get('card_text'):
+        clients.ephemeral(event, "I can't find that review anymore, so nothing was changed.")
+        return
+    data = dict(json.loads(row['data'] or '{}'), key_for_buttons=row['key'])
+    notes, done, user = json.loads(row.get('notes') or '[]'), set(), event['user']
+    if row.get('notion_url'):
+        done.add('log_notion')
+    if any('Gmail draft requested' in n for n in notes):
+        done.add('draft_gmail')
+    if row.get('parked_by'):
+        clients.ephemeral(event, 'This one is already parked.')
+        return
+    try:
+        if event['action'] == 'park':
+            ledger.mark(row['key'], parked_by=user)
+            notes.append(':double_vertical_bar: Parked by <@%s>' % user)
+            done |= set(ACTIONS)
+        else:
+            if not cfg.get('notion_write') or notion is None:
+                clients.ephemeral(event, 'Notion writing is turned off (NOTION_WRITE), so nothing was changed.')
+                return
+            url, page_id = row.get('notion_url'), row.get('notion_id')
+            if not url:
+                url, page_id, existed = notion.log(data, row)
+                ledger.mark(row['key'], notion_url=url, notion_id=page_id)
+                notes.append(':white_check_mark: %s by <@%s> · <%s|Open the row>'
+                             % ('Already in Notion, linked' if existed else 'Logged in Notion', user, url))
+                done.add('log_notion')
+            elif event['action'] == 'log_notion':
+                clients.ephemeral(event, 'Already logged: %s' % url)
+                return
+            if event['action'] == 'draft_gmail':
+                body = gmail_draft(data)
+                if not body or not data.get('email'):
+                    clients.ephemeral(event, 'There is no email draft on this card to send to Gmail.')
+                    return
+                notion.request_draft(page_id, data, body)
+                notes.append(':email: Gmail draft requested by <@%s>; it appears in Gmail after the next pipeline run '
+                             '· <%s|Notion row>' % (user, url))
+                done.add('draft_gmail')
+    except Exception:
+        print('Button action failed: %s' % event['action'], flush=True)
+        clients.ephemeral(event, "That didn't go through, and nothing was changed. Try again in a minute, or check "
+                                 'the Notion token and sharing in Railway.')
+        return
+    ledger.mark(row['key'], notes=json.dumps(notes))
+    try:
+        clients.update_card(event['channel'], event['message_ts'], row['card_text'],
+                            action_buttons(cfg, data, done), notes)
+    except Exception:
+        print('Card update failed after a button action.', flush=True)
 
 
 LABELS = {'pursue': 'pursue', 'triage': 'triage', 'redirect': 'self-serve', 'do_not_pursue': 'do not pursue'}
@@ -910,8 +1211,10 @@ def build_summary(cfg, rows, clients, now_utc):
         order = ['pursue', 'triage', 'redirect', 'do_not_pursue']
         for r in sorted(ok, key=lambda r: (order.index(r['decision']) if r['decision'] in order else 9, r['created'])):
             label = _link(clients, r['channel'], r['ts'], r['company'] or 'submission')
-            lines.append('%s %s  ·  %s%s' % (DECISIONS.get(r['decision'], '').split(' ')[0], label, r['route'],
-                                              ('  ·  ' + r['headline']) if r['headline'] else ''))
+            lines.append('%s %s  ·  %s%s%s' % (DECISIONS.get(r['decision'], '').split(' ')[0], label, r['route'],
+                                                ('  ·  ' + r['headline']) if r['headline'] else '',
+                                                '  ·  parked' if r.get('parked_by') else
+                                                '  ·  in Notion' if r.get('notion_url') else ''))
         problems = [r for r in rows if r['outcome'] != 'ok' or r['delivered'] == 'unconfirmed']
         if problems:
             lines += ['', '*Needs attention*']
@@ -960,6 +1263,7 @@ def worker():
     with open(store.path + '.worker.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
+        notion = NotionWriter(cfg) if cfg['notion_write'] else None
         while True:
             job = store.next_job()
             if not job:
@@ -970,6 +1274,8 @@ def worker():
                 process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'feedback':
                 process_feedback(store, job, review_clients, ledger)
+            elif json.loads(job['payload']).get('kind') == 'action':
+                process_action(store, job, review_clients, ledger, cfg, notion)
             else:
                 chat.process(store, job, chat_clients)
 

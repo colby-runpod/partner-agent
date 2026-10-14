@@ -5,10 +5,11 @@ Team Partner Agent qualifies it and posts a review card. It uses the same rules
 as the Notion intake pipeline: four checks, a score, the do-not-pursue gate,
 routing and one suggested next step.
 
-Phase 1 is advisory only. The bot reads the digest, runs a short web search on
-the person and the company, and posts the card. It never writes to Notion or
-HubSpot, never drafts or sends email, and never contacts anyone. The scheduled
-Notion pipeline is still the only thing that writes those records.
+The review itself is advisory. The bot reads the digest, runs a short web
+search on the person and the company, and posts the card. It never writes to
+HubSpot, never sends email and never contacts anyone. It writes to Notion only
+when someone clicks a button on the card (see *Buttons*). The scheduled Notion
+pipeline does everything else.
 
 Chat mentions keep working. When `REVIEW_ENABLED=true`, `review.py` runs both
 features on the same queue and worker.
@@ -84,6 +85,36 @@ Cards posted before this release don't record their message ID, so reactions
 only count on new cards. Corrections in a thread work for any card from PR A
 on.
 
+## Buttons
+
+With `INTERACTIVE_ENABLED=true`, each successful card gets buttons. Only
+`FEEDBACK_USER_IDS` can use them; clicks from anyone else are ignored.
+
+- **Log in Notion** creates the intake row in Partner Biz Dev, with Intake Ref
+  `tpa:<channel>:<digest ts>` and the review's checks, score, decision, route
+  and summary filled in. If a row already exists for that ref, or for the same
+  email submitted within the last 3 days, it links that row instead of
+  creating a second one.
+- **Draft in Gmail** logs the row if needed, then writes the card's probe or
+  pointer reply into the row's Next Step Notes as an instruction. The
+  scheduled pipeline creates the Gmail draft on its next run, and you send it
+  as usual. The bot never touches Gmail.
+- **Park** sets the card aside. The daily summary shows it as parked.
+
+After a click, the card updates in place to show what happened and who did
+it, and buttons that no longer apply are removed. If something fails, only
+you see the message (an ephemeral reply), and nothing changes.
+
+Setup:
+
+1. In the Slack app, open **Interactivity & Shortcuts**, turn it on, and set
+   the Request URL to `https://<railway-domain>/slack/interactions`. Save.
+2. In Railway, set `INTERACTIVE_ENABLED=true`. Park works right away.
+3. For the Notion buttons: an internal Notion integration with **read and
+   insert** content capabilities, shared with Partner Biz Dev. Set
+   `NOTION_TOKEN` and `NOTION_WRITE=true`. Without `NOTION_WRITE`, only Park
+   shows.
+
 ## Modes
 
 - `REVIEW_MODE=shadow` (default) posts each card to #team-partnerships-development
@@ -156,16 +187,16 @@ expect more "unverified".
 - Work is serial. A review takes roughly 30-90 seconds, and chat mentions wait
   behind it.
 - `/healthz` shows `review_enabled`, `review_mode`, `web_search`,
-  `notion_lookup`, `summary_enabled` and `summary_hour`.
+  `notion_lookup`, `summary_enabled`, `summary_hour`, `interactive` and
+  `notion_write`.
 - The instructions are prompt-cached, which lowers the cost of each review.
 - Railway logs print `Review queued digest <ts>` for each digest picked up. A
   digest-looking post from an unexpected bot prints its `bot_id` so you can add
   it to `REVIEW_BOT_IDS`. No message content is logged.
 
-## Phase 2 (not built)
+## Not built yet
 
-- Approve / Park buttons on the card, which need Slack interactivity.
-- The bot creates the Notion row, and the scheduled pipeline stops creating
-  rows from Slack.
 - HubSpot contact links on the card.
 - Partners database lookup (needs its data source ID).
+- A Send to Dean button. The card's Dean draft is still for you to send while
+  the template settles.
