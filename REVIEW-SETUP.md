@@ -62,6 +62,28 @@ reminder in the summary during the last 14 days. The summary posts at most
 once a day and is never retried. Records are kept in `chat.sqlite3` on the
 `/data` volume.
 
+## Feedback
+
+React :+1: or :-1: on a card, or reply in its thread with
+`@Team Partner Agent should be triage`. The calls you can name are pursue,
+triage, self-serve and do not pursue (`actually` and `correction:` also work).
+Votes are one per person per card, and the latest one counts. Removing a
+reaction removes the vote. A correction gets a one-line acknowledgment in the
+thread. Only `FEEDBACK_USER_IDS` can give feedback; if it's unset, that falls
+back to `CHAT_USER_IDS`. The bot recognizes its own cards through
+`REVIEW_BOT_USER_ID` (default `U0C7372ET45`).
+
+On Fridays, after the daily summary, a *Weekly review check* shows the
+thumbs up and down, how often the bot and you agreed, each correction, and
+the most common miss if it happened twice or more. A repeated miss is the cue
+to change a rule in `decide()`.
+
+Slack setup: add the `reactions:read` scope and subscribe to the
+`reaction_added` and `reaction_removed` bot events, then reinstall the app.
+Cards posted before this release don't record their message ID, so reactions
+only count on new cards. Corrections in a thread work for any card from PR A
+on.
+
 ## Modes
 
 - `REVIEW_MODE=shadow` (default) posts each card to #team-partnerships-development
