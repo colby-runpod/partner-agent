@@ -61,6 +61,11 @@ SIGNALS = ('spam', 'wrong_door', 'below_supply_bar', 'ask_unusable', 'specific_m
            'quantified_volume', 'warm_intro', 'notable_counterparty', 'already_in_play')
 MAX_DIGEST = 20000
 TRIGGER = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*review\b', re.I)
+# Polite forms of the same ask, e.g. 'can you review', 'please re-review this', 'could you run the review again?'.
+POLITE_TRIGGER = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*(?:hey\s+|hi\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?'
+                            r'(?:re-?review|review|run\s+(?:a|the)\s+review|redo\s+the\s+review)'
+                            r'(?:\s+(?:this|it|this\s+one|this\s+submission|the\s+submission|again|please|now))*'
+                            r'\s*[?.!]*\s*$', re.I)
 FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
              'yahoo.com', 'ymail.com', 'proton.me', 'protonmail.com', 'icloud.com', 'me.com', 'aol.com',
              'gmx.com', 'gmx.de', 'web.de', 'mail.com', 'mail.ru', 'yandex.ru', 'yandex.com', 'qq.com',
@@ -253,7 +258,7 @@ def accept_manual(body, cfg):
         return None
     if not thread or thread == ts or not re.fullmatch(r'\d+\.\d+', thread):
         return None  # Must be a reply inside the digest's thread.
-    if not TRIGGER.match(e.get('text', '')):
+    if not (TRIGGER.match(e.get('text', '')) or POLITE_TRIGGER.match(e.get('text', ''))):
         return None
     return dict(kind='review_manual', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
                 channel=e['channel'], ts=ts, thread_ts=thread, user=e['user'], text='')

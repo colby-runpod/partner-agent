@@ -136,7 +136,8 @@ Setup:
 
 Mention the bot with "review" inside a digest's thread, for example
 `@Team Partner Agent review`, and it runs the full review on that thread's
-HubSpot digest. The card is posted in the same thread and tags you. It
+HubSpot digest. Short polite forms work too, such as "can you review",
+"please re-review this" or "could you run the review again?". The card is posted in the same thread and tags you. It
 answers only users in `CHAT_USER_IDS`, in `REVIEW_CHANNEL_IDS` or
 `CHAT_CHANNEL_IDS`. If the thread doesn't start with a HubSpot digest, it says
 so. Other mentions still go to chat as before.
