@@ -10,18 +10,22 @@ Runpod's internal partnerships agent. Includes a **preview-only objective briefi
 
 ## p-OPS foundation
 
-The Partner Ops expansion begins with two deliberately non-production components:
+The Partner Ops expansion is a deliberately isolated, disabled-by-default foundation:
 
 - [`P_OPS_PROMPT.md`](P_OPS_PROMPT.md) is the durable operating and approval contract for p-OPS.
 - [`p_ops.py`](p_ops.py) is a deterministic task-hygiene and Linear-routing planner. It previews evidence-bound status changes and never calls an external system.
 - [`p_ops_notion.json`](p_ops_notion.json) maps the planner to the live Working Tasks schema. The database now has a dedicated `Linear Issue` URL property.
 - [`p_ops_notion.py`](p_ops_notion.py) reads active Working Tasks, creates an idempotent SQLite preview and approval queue, and reconciles writes without blind retries.
+- [`p_ops_capture.py`](p_ops_capture.py) accepts only Colby's allowlisted Slack `:handshake::skin-tone-2:` reactions in allowlisted channels, verifies Slack signatures, and stores the exact reacted message as untrusted source evidence. It does not create a task or send a reply.
+- [`p_ops_approval.py`](p_ops_approval.py) separates message drafting, exact-content approval, and explicit send authorization. Editing the content or destination invalidates approval. An uncertain send is held for review and is never retried automatically.
+- [`p_ops_linear.py`](p_ops_linear.py) drafts bounded Linear issues, searches by the source Notion URL before creation, and requires explicit approval plus a separate write gate. It cannot set priority, assignment, due dates, projects, or roadmap commitments.
 
 Run the p-OPS safety tests with:
 
 ```sh
 python3 -m unittest test_p_ops.py -v
 python3 -m unittest test_p_ops_notion.py -v
+python3 -m unittest test_p_ops_capture.py test_p_ops_approval.py test_p_ops_linear.py -v
 ```
 
 Preview the live queue without writing:
@@ -39,7 +43,16 @@ python3 p_ops_notion.py approve ACTION_ID
 
 Applying is separately gated by `P_OPS_NOTION_WRITE=true`. Without `--include-auto`, only explicitly approved rows are eligible. Source changes after preview produce a conflict instead of a write. A timed-out or otherwise uncertain write is read back once and is never automatically retried.
 
-The current Slack chat service automatically posts answers. It is not yet the p-OPS communication surface because p-OPS requires Colby's review and explicit send authorization for every message. Keep p-OPS writes disabled until a live preview has been reviewed and accepted. Message sending remains disabled until a separate draft-review-send ledger is implemented and tested.
+The current Slack chat service automatically posts answers. It is not the p-OPS communication surface because p-OPS requires Colby's review and explicit send authorization for every message. The p-OPS capture, message, and Linear components remain disconnected from that service.
+
+All new capabilities are off unless their individual gate is exactly `true`:
+
+- `P_OPS_CAPTURE_ENABLED` accepts Slack capture events. `P_OPS_CAPTURE_CHANNEL_IDS` and `P_OPS_CAPTURE_USER_IDS` are required comma-separated allowlists.
+- `P_OPS_NOTION_WRITE` permits approved Notion actions.
+- `P_OPS_LINEAR_WRITE` permits an approved Linear draft to be created after a duplicate search.
+- `P_OPS_SEND_MESSAGES` permits a separately approved and send-authorized Slack or email draft to be delivered through an injected sender.
+
+These gates do not replace review. Keep them unset until the corresponding receiver/worker is deployed with persistent storage, scoped credentials, and an operator review surface.
 
 ## Run the pilot
 
