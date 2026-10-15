@@ -8,6 +8,22 @@ The new first-release PartnerOS application is in [`partneros/`](partneros/READM
 
 Runpod's internal partnerships agent. Includes a **preview-only objective briefing pilot** and an **immediate Slack intake service**. The Slack chat receiver has been deployed separately; the original Notion intake mode remains paused pending setup. The intake service can create Notion entries and reply in Slack only after credentials, hosting, and `INTAKE_ENABLED=true` are configured. See [deployment instructions](DEPLOYMENT.md).
 
+## p-OPS foundation
+
+The Partner Ops expansion begins with two deliberately non-production components:
+
+- [`P_OPS_PROMPT.md`](P_OPS_PROMPT.md) is the durable operating and approval contract for p-OPS.
+- [`p_ops.py`](p_ops.py) is a deterministic task-hygiene and Linear-routing planner. It previews evidence-bound status changes and never calls an external system.
+- [`p_ops_notion.json`](p_ops_notion.json) maps the planner to the live Working Tasks schema. The database now has a dedicated `Linear Issue` URL property.
+
+Run the p-OPS safety tests with:
+
+```sh
+python3 -m unittest test_p_ops.py -v
+```
+
+The current Slack chat service automatically posts answers. It is not yet the p-OPS communication surface because p-OPS requires Colby's review and explicit send authorization for every message. Keep p-OPS external writes and sends disabled until the Notion schema adapter, preview queue, approval ledger, and idempotent write reconciliation are implemented and tested.
+
 ## Run the pilot
 
 The default workflow needs Python 3.9+ and no third-party packages or credentials:
