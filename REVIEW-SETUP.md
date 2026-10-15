@@ -106,7 +106,9 @@ With `INTERACTIVE_ENABLED=true`, each successful card gets buttons. Only
 - **Draft in Gmail** logs the row if needed, then writes the card's probe or
   pointer reply into the row's Next Step Notes as an instruction. The
   scheduled pipeline creates the Gmail draft on its next run, and you send it
-  as usual. The bot never touches Gmail.
+  as usual. Any notes already on the row are kept under the request. If the
+  row already has a Gmail Draft ID, it stops and tells you instead of asking
+  for a second draft. The bot never touches Gmail.
 - **Park** sets the card aside. The daily summary shows it as parked.
 
 After a click, the card updates in place to show what happened and who did
@@ -118,8 +120,8 @@ Setup:
 1. In the Slack app, open **Interactivity & Shortcuts**, turn it on, and set
    the Request URL to `https://<railway-domain>/slack/interactions`. Save.
 2. In Railway, set `INTERACTIVE_ENABLED=true`. Park works right away.
-3. For the Notion buttons: an internal Notion integration with **read and
-   insert** content capabilities, shared with Partner Biz Dev. Set
+3. For the Notion buttons: an internal Notion integration with **read, insert
+   and update** content capabilities, shared with Partner Biz Dev. Set
    `NOTION_TOKEN` and `NOTION_WRITE=true`. Without `NOTION_WRITE`, only Park
    shows.
 

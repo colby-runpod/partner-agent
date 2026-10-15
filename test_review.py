@@ -894,7 +894,8 @@ class NotionWriterTests(unittest.TestCase):
         w = review.NotionWriter(ICFG); calls = []
         w._req = lambda m, p, payload=None: calls.append((m, p, payload)) or {}
         w.request_draft('pid1', {'email': 'demo@example.com'}, 'Hi Demo-- hello')
-        m, path, payload = calls[0]
+        self.assertEqual(calls[0][:2], ('GET', 'pages/pid1'))
+        m, path, payload = calls[1]
         self.assertEqual((m, path), ('PATCH', 'pages/pid1'))
         note = payload['properties']['Next Step Notes']['rich_text'][0]['text']['content']
         self.assertIn('Create a Gmail draft to demo@example.com', note); self.assertIn('Hi Demo-- hello', note)
@@ -914,10 +915,6 @@ class NotionWriterTests(unittest.TestCase):
         ts = review.ReviewClients(dict(ICFG, review_mode='thread')).post(review.accept_review(BODY, ICFG), 'card', [('park', 'k')])
         sent = api.call_args.args[2]
         self.assertEqual(ts, '9.9'); self.assertEqual(sent['blocks'][-1]['type'], 'actions'); self.assertEqual(sent['text'], 'card')
-
-
-if __name__ == '__main__':
-    unittest.main()
 
 
 class ConsistencyTests(unittest.TestCase):
@@ -968,3 +965,45 @@ class ConsistencyTests(unittest.TestCase):
     def test_draft_ending_in_backtick_stays_fenced(self):
         card = review.render(review.parse(json.dumps(GOOD)), None, [('Probe reply', 'see `x`')])
         self.assertIn("```\nsee 'x'\n```", card)
+
+
+class DraftSafetyTests(unittest.TestCase):
+    """Draft in Gmail on a row the pipeline already handled: keep its notes, never ask for a second draft."""
+    def page(self, notes='', draft_id=''):
+        rt = lambda t: [{'plain_text': t}] if t else []
+        return {'properties': {'Next Step Notes': {'rich_text': rt(notes)}, 'Gmail Draft ID': {'rich_text': rt(draft_id)}}}
+
+    def test_keeps_earlier_notes(self):
+        w = review.NotionWriter(ICFG); calls = []
+        def fake(m, p, payload=None):
+            calls.append((m, p, payload)); return self.page('Routed to Dean on Oct 13') if m == 'GET' else {}
+        w._req = fake
+        w.request_draft('pid1', {'email': 'demo@example.com'}, 'Hi Demo')
+        note = ''.join(t['text']['content'] for t in calls[1][2]['properties']['Next Step Notes']['rich_text'])
+        self.assertTrue(note.startswith('Create a Gmail draft to demo@example.com'))
+        self.assertTrue(note.endswith('Earlier notes on this row:\nRouted to Dean on Oct 13'))
+
+    def test_refuses_second_draft(self):
+        w = review.NotionWriter(ICFG); calls = []
+        w._req = lambda m, p, payload=None: calls.append(m) or self.page(draft_id='r-123')
+        with self.assertRaises(review.AlreadyDrafted):
+            w.request_draft('pid1', {'email': 'demo@example.com'}, 'Hi Demo')
+        self.assertEqual(calls, ['GET'])
+
+    def test_button_reports_existing_draft(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        store = Store(tmp.name + '/q.db'); ledger = review.Ledger(store.path); client = FakeUI()
+        r = review.parse(json.dumps(PROBE_GOOD)); r['email'], r['submitted'] = 'demo@example.com', '2026-10-13'
+        r['drafts'] = review.drafts(r, 'demo@example.com', SUBMITTED); client.last = r
+        store.enqueue(review.accept_review(BODY, ICFG)); review.process(store, store.next_job(), client, ledger, ICFG)
+        class Drafted(FakeNotion):
+            def request_draft(self, *a): raise review.AlreadyDrafted()
+        ev = review.accept_action(click('draft_gmail'), ICFG); store.enqueue(ev)
+        review.process_action(store, store.next_job(), client, ledger, ICFG, Drafted())
+        self.assertIn('already has a Gmail draft', client.ephemerals[-1])
+        self.assertEqual(client.updates[-1][2], [('park', 'T1:CSUB:50.1')])
+        self.assertIn('Logged in Notion', client.updates[-1][3][0])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1020,6 +1020,10 @@ def _rich(text):
     return [{'type': 'text', 'text': {'content': text[i:i + 1800]}} for i in range(0, len(text), 1800)][:50]
 
 
+class AlreadyDrafted(Exception):
+    pass
+
+
 class NotionWriter:
     """Creates intake rows on a button click and passes Gmail draft requests to the pipeline."""
 
@@ -1100,9 +1104,19 @@ class NotionWriter:
         return page['url'], page['id'], False
 
     def request_draft(self, page_id, data, body):
+        """Ask the pipeline for a Gmail draft, keeping any notes already on the row. Refuses a second draft."""
+        props = self._req('GET', 'pages/%s' % page_id).get('properties') or {}
+        def plain(name):
+            return ''.join(t.get('plain_text') or (t.get('text') or {}).get('content', '')
+                           for t in (props.get(name) or {}).get('rich_text') or []).strip()
+        if plain('Gmail Draft ID'):
+            raise AlreadyDrafted()
+        earlier = plain('Next Step Notes')
         note = ('Create a Gmail draft to %s with the subject "Your Runpod partner request" and exactly this body, adding '
                 'the standard signature, then record it with the usual draft hygiene and clear this note:\n\n%s\n\n'
                 '(Requested from the Team Partner Agent card on %s.)' % (data['email'], body, dt.date.today().isoformat()))
+        if earlier:
+            note += '\n\n---\nEarlier notes on this row:\n' + earlier
         self._req('PATCH', 'pages/%s' % page_id, {'properties': {
             'Next Step Notes': {'rich_text': _rich(note)},
             'Suggested Next Step': {'select': {'name': 'Draft email reply'}}}})
@@ -1149,7 +1163,15 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 if not body or not data.get('email'):
                     clients.ephemeral(event, 'There is no email draft on this card to send to Gmail.')
                     return
-                notion.request_draft(page_id, data, body)
+                try:
+                    notion.request_draft(page_id, data, body)
+                except AlreadyDrafted:
+                    clients.ephemeral(event, 'This row already has a Gmail draft, so I did not ask for another. Check '
+                                             'your Gmail drafts, or clear Gmail Draft ID on the row to redo it: %s' % url)
+                    ledger.mark(row['key'], notes=json.dumps(notes))
+                    clients.update_card(event['channel'], event['message_ts'], row['card_text'],
+                                        action_buttons(cfg, data, done | {'draft_gmail'}), notes)
+                    return
                 notes.append(':email: Gmail draft requested by <@%s>; it appears in Gmail after the next pipeline run '
                              '· <%s|Notion row>' % (user, url))
                 done.add('draft_gmail')
