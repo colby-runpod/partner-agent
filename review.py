@@ -535,7 +535,7 @@ INVITE = ("Hi {first},\n\nThanks for submitting your partnership request.\n\nWe 
           "are working on and need to get in touch with the team, please reply here with more details and someone will "
           "be in touch.\n\nRunpod Partner Team")
 DEAN = ("Hey Dean -- passing along a supply-side infra lead.\nQuick details:\n\n* Company: {company}\n* Contact: {contact}\n"
-        "* Email: `{email}`\n* Region: {region}\n* Motion: {motion}\n* HubSpot: search `{email}`")
+        "* Email: {email}\n* Region: {region}\n* Motion: {motion}\n* HubSpot: search {email}")
 
 
 def drafts(review, email, submitted):
@@ -611,7 +611,7 @@ def render(review, history=None, draft_list=()):
         lines += ['', ':warning: *Risks*'] + ['• ' + r for r in review['risks']]
     lines += render_history(history)
     for label, text in draft_list:
-        body = text if label == 'Decline' else '```%s```' % html.escape(text, quote=False).replace('```', "'''")
+        body = text if label == 'Decline' else '```\n%s\n```' % html.escape(text, quote=False).replace('`', "'")
         lines += ['', ':memo: *%s*' % label, body]
     if review['sources']:
         lines += ['', '*Sources* ' + '  ·  '.join('<%s|%s>' % s for s in review['sources'])]
@@ -890,6 +890,8 @@ def process(store, job, clients, ledger=None, cfg=None):
                 except Exception:
                     raise ThreadUnreadable() from None
             text = clients.review(event)
+            if ledger:
+                text = with_prior(text, ledger, clients, event)
         except NotDigest:
             text, outcome = NOT_DIGEST, 'not_digest'
         except ThreadUnreadable:
@@ -934,6 +936,42 @@ def process(store, job, clients, ledger=None, cfg=None):
                 print('Review ledger write failed.', flush=True)
 
 
+def prior_line(prev, review):
+    """One line comparing a re-review with the earlier call on the same submission."""
+    try:
+        old = json.loads(prev.get('data') or '{}')
+    except ValueError:
+        old = {}
+    when = dt.datetime.fromtimestamp(prev.get('created') or 0, dt.timezone.utc)
+    when = mountain(when).strftime('%b %-d')
+    if (prev.get('score'), prev.get('decision')) == (review.get('score'), review.get('decision')):
+        return ':repeat: Same call as the earlier review (%s).' % when
+    moved = []
+    for name in ('identity', 'company', 'fit', 'potential'):
+        a = ((old.get('checks') or {}).get(name) or [''])[0]
+        b = ((review.get('checks') or {}).get(name) or [''])[0]
+        if a and b and a != b:
+            moved.append('%s went from %s to %s' % (name.capitalize(), a, b))
+    why = ('; '.join(moved) + '.') if moved else 'The checks match, so the difference is in the signals the research found.'
+    return (':arrows_counterclockwise: *Changed from the earlier review (%s):* that one said Score %s, %s. %s '
+            'Pick the call you agree with, or reply with a correction.'
+            % (when, prev.get('score') or '?', LABELS.get(prev.get('decision'), prev.get('decision') or '?'), _plain(why, 400)))
+
+
+def with_prior(text, ledger, clients, event):
+    review = getattr(clients, 'last', None)
+    if not isinstance(review, dict):
+        return text
+    try:
+        prev = ledger.find(thread_ts=event['thread_ts'])
+    except Exception:
+        return text
+    if not prev:
+        return text
+    first, _, rest = text.partition('\n')
+    return first + '\n' + prior_line(prev, review) + ('\n' + rest if rest else '')
+
+
 def card_blocks(text, buttons, notes=()):
     """Slack blocks for a card: the text in sections under 3,000 characters, notes, then buttons."""
     blocks, chunk = [], ''
@@ -945,9 +983,10 @@ def card_blocks(text, buttons, notes=()):
         chunk = chunk + '\n' + line if chunk else line
     if chunk:
         blocks.append(chunk)
-    out = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': b}} for b in blocks if b.strip()][:45]
+    # verbatim stops Slack auto-linking emails and URLs (it rewrote them inside drafts); explicit <url|label> links still work.
+    out = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': b, 'verbatim': True}} for b in blocks if b.strip()][:45]
     for note in notes:
-        out.append({'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': note}]})
+        out.append({'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': note, 'verbatim': True}]})
     if buttons:
         out.append({'type': 'actions', 'elements': [
             dict({'type': 'button', 'action_id': aid, 'value': value, 'text': {'type': 'plain_text', 'text': ACTIONS[aid]}},
@@ -979,6 +1018,10 @@ def action_buttons(cfg, data, done=()):
 def _rich(text):
     text = str(text or '')
     return [{'type': 'text', 'text': {'content': text[i:i + 1800]}} for i in range(0, len(text), 1800)][:50]
+
+
+class AlreadyDrafted(Exception):
+    pass
 
 
 class NotionWriter:
@@ -1061,9 +1104,19 @@ class NotionWriter:
         return page['url'], page['id'], False
 
     def request_draft(self, page_id, data, body):
+        """Ask the pipeline for a Gmail draft, keeping any notes already on the row. Refuses a second draft."""
+        props = self._req('GET', 'pages/%s' % page_id).get('properties') or {}
+        def plain(name):
+            return ''.join(t.get('plain_text') or (t.get('text') or {}).get('content', '')
+                           for t in (props.get(name) or {}).get('rich_text') or []).strip()
+        if plain('Gmail Draft ID'):
+            raise AlreadyDrafted()
+        earlier = plain('Next Step Notes')
         note = ('Create a Gmail draft to %s with the subject "Your Runpod partner request" and exactly this body, adding '
                 'the standard signature, then record it with the usual draft hygiene and clear this note:\n\n%s\n\n'
                 '(Requested from the Team Partner Agent card on %s.)' % (data['email'], body, dt.date.today().isoformat()))
+        if earlier:
+            note += '\n\n---\nEarlier notes on this row:\n' + earlier
         self._req('PATCH', 'pages/%s' % page_id, {'properties': {
             'Next Step Notes': {'rich_text': _rich(note)},
             'Suggested Next Step': {'select': {'name': 'Draft email reply'}}}})
@@ -1110,7 +1163,15 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 if not body or not data.get('email'):
                     clients.ephemeral(event, 'There is no email draft on this card to send to Gmail.')
                     return
-                notion.request_draft(page_id, data, body)
+                try:
+                    notion.request_draft(page_id, data, body)
+                except AlreadyDrafted:
+                    clients.ephemeral(event, 'This row already has a Gmail draft, so I did not ask for another. Check '
+                                             'your Gmail drafts, or clear Gmail Draft ID on the row to redo it: %s' % url)
+                    ledger.mark(row['key'], notes=json.dumps(notes))
+                    clients.update_card(event['channel'], event['message_ts'], row['card_text'],
+                                        action_buttons(cfg, data, done | {'draft_gmail'}), notes)
+                    return
                 notes.append(':email: Gmail draft requested by <@%s>; it appears in Gmail after the next pipeline run '
                              '· <%s|Notion row>' % (user, url))
                 done.add('draft_gmail')
