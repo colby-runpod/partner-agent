@@ -22,7 +22,8 @@ The Partner Ops expansion is a deliberately isolated, disabled-by-default founda
 - [`p_ops_inbox.py`](p_ops_inbox.py) turns a verified Slack capture into a conservative, duplicate-checked Working Tasks Inbox proposal. The proposal must be reviewed before the separate Notion creation gate can execute it.
 - [`p_ops_runtime.py`](p_ops_runtime.py) connects the queues through one locked worker and a protected `/review` dashboard. It can schedule one daily Notion preview per America/Denver day without treating routine checks as meaningful task activity.
 - [`p_ops_triage.py`](p_ops_triage.py) defines the strict structured decision contract and applies deterministic evidence, date, routing, risk, and approval checks after model analysis. Pilot results are always non-executable shadow decisions.
-- [`p_ops_eval.py`](p_ops_eval.py) validates and optionally runs the 25-case triage corpus in [`evals/p_ops_triage_cases.jsonl`](evals/p_ops_triage_cases.jsonl). Eighteen cases are scenario summaries derived from prior work discussed with Colby; they are not yet verified exports of the underlying Notion, Slack, Gmail, or transcript sources.
+- [`p_ops_shadow.py`](p_ops_shadow.py) connects captured Inbox proposals to read-only triage. It shortlists active Working Tasks, records the evidence bundle and guarded decision in the local audit database, exposes no approval action, and cannot change an external system.
+- [`p_ops_eval.py`](p_ops_eval.py) validates and optionally runs the 25-case triage corpus in [`evals/p_ops_triage_cases.jsonl`](evals/p_ops_triage_cases.jsonl). Each historical case records its reconciliation status and supporting source references; [`evals/HISTORICAL_EVIDENCE.md`](evals/HISTORICAL_EVIDENCE.md) summarizes the audit and remaining access gaps.
 - [`P_OPS_DEPLOYMENT.md`](P_OPS_DEPLOYMENT.md) contains the isolated pilot deployment and validation order. The existing Slack chat service is not changed.
 
 Run the p-OPS safety tests with:
@@ -36,7 +37,9 @@ python3 -m unittest test_p_ops_triage.py -v
 python3 p_ops_eval.py
 ```
 
-The credential-free eval command validates the corpus and writes `output/p_ops_triage_eval.json`; it does not call a model. A live run requires `OPENAI_API_KEY`, an explicitly selected `P_OPS_MODEL`, and `--live`. Live evaluation may incur API charges. The triage model is not yet connected to the background worker.
+The credential-free eval command validates the corpus and writes `output/p_ops_triage_eval.json`; it does not call a model. A live run requires `OPENAI_API_KEY`, an explicitly selected `P_OPS_MODEL`, and `--live`. Live evaluation may incur API charges. The historical corpus now records source-level reconciliation status: 15 verified, one partial, and two blocked by inaccessible Slack channel history.
+
+The background worker can run the same contract against captured proposals only when `P_OPS_TRIAGE_SHADOW_ENABLED=true`. Shadow triage reads active Working Tasks, calls the configured model, and writes a non-executable audit record to the local p-OPS database. It does not update the proposal or authorize Notion, Linear, Slack, or Gmail actions.
 
 Preview the live queue without writing:
 

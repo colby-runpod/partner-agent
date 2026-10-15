@@ -4,7 +4,7 @@
 
 The standalone runtime is implemented and locally tested. It has not been deployed or connected to the live Slack event URL. It does not alter the existing Runpod Slack chat service.
 
-The structured triage engine and its 25-case evaluation harness are implemented separately. They remain in shadow mode and are not yet connected to the runtime worker. The historical cases are summaries from prior work discussions and still need reconciliation against their original Notion, Slack, Gmail, and transcript evidence before they become a release gate.
+The structured triage engine and its 25-case evaluation harness are implemented. The runtime connection is read-only and remains disabled unless `P_OPS_TRIAGE_SHADOW_ENABLED=true`; every result is non-executable. Historical reconciliation currently contains 15 verified cases, one partial case, and two cases blocked because the connected Slack app cannot read the separate `runpod-team` workspace channels. These cases are useful calibration evidence but are not yet a release gate until the partial and blocked cases are resolved and a live model run passes.
 
 The runtime provides:
 

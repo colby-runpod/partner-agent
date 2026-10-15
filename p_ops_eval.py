@@ -7,6 +7,7 @@ from p_ops_triage import ResponsesTriageClient, guard_decision
 
 
 REQUIRED_CASE_FIELDS = {"id", "name", "provenance", "source", "expected"}
+EVIDENCE_STATES = {"verified", "partial", "blocked", "contradicted"}
 
 
 def load_cases(path):
@@ -33,6 +34,10 @@ def validate_case(case):
         raise ValueError("Eval case is missing required fields.")
     if case["provenance"] not in {"historical", "policy_edge"}:
         raise ValueError("Eval provenance must be historical or policy_edge.")
+    if case["provenance"] == "historical":
+        evidence = case.get("evidence") or {}
+        if evidence.get("status") not in EVIDENCE_STATES or not evidence.get("refs"):
+            raise ValueError("Historical eval cases require evidence status and references.")
     source, expected = case["source"], case["expected"]
     if not source.get("id") or not source.get("text"):
         raise ValueError("Eval source requires an ID and text.")
@@ -88,6 +93,9 @@ def summary(cases, results=None):
     historical = sum(case["provenance"] == "historical" for case in cases)
     base = {"cases": len(cases), "historical": historical, "policy_edge": len(cases) - historical,
             "corpus_valid": True, "live_model_run": results is not None}
+    base["historical_evidence"] = {state: sum(
+        case.get("evidence", {}).get("status") == state for case in cases if case["provenance"] == "historical")
+        for state in sorted(EVIDENCE_STATES)}
     if results is not None:
         base.update({"passed": sum(row["passed"] for row in results),
                      "failed": sum(not row["passed"] for row in results), "results": results})

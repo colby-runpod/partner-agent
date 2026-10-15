@@ -79,6 +79,8 @@ class TriageTests(unittest.TestCase):
         report = summary(cases)
         self.assertEqual(25, report["cases"])
         self.assertGreaterEqual(report["historical"], 15)
+        self.assertEqual({"blocked": 2, "contradicted": 0, "partial": 1, "verified": 15},
+                         report["historical_evidence"])
         self.assertFalse(report["live_model_run"])
 
     def test_eval_scores_expected_disposition_and_review(self):

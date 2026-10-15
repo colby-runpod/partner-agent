@@ -7,6 +7,7 @@ import unittest
 import urllib.parse
 
 from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, run_once
+from p_ops_triage import TriageDecision
 
 
 CFG = {"runtime_enabled": True, "enabled": True, "team_id": "T1", "app_id": "A1", "secret": "secret",
@@ -42,6 +43,29 @@ class FakeNotion:
     def active_pages(self):
         self.reads += 1
         return []
+
+
+class FakeTriage:
+    def __init__(self): self.calls = 0
+    def analyze(self, bundle):
+        self.calls += 1
+        return TriageDecision.from_dict({
+            "disposition": "create_task", "title": "Prepare Redis follow-up",
+            "summary": "The capture contains a concrete follow-up.", "strategic_value": "medium",
+            "objective_id": None, "workstream_id": None, "partner_ids": [], "priority": "medium",
+            "severity": "low", "work_mode": "Prepare", "canonical_task_id": None,
+            "parent_task_id": None, "meeting_id": None, "owner": "Colby",
+            "owning_function": "Partnerships", "supporting_functions": [],
+            "next_step": "Review the source and confirm the owner.", "next_step_date": None,
+            "due_date": None, "definition_of_done": "The owner and next checkpoint are recorded.",
+            "dependency": "", "waiting_on": "", "requires_linear": False,
+            "requires_message": False, "preparation_required": True,
+            "proposed_actions": ["create_notion_task"],
+            "evidence_refs": [bundle["source"]["id"]], "assumptions": [],
+            "missing_evidence": ["Cross-system evidence has not been retrieved."],
+            "review_reasons": [], "confidence": 0.83,
+            "rationale": "The action is specific, but the shadow bundle is intentionally incomplete.",
+        })
 
 
 class RuntimeTests(unittest.TestCase):
@@ -91,6 +115,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("200 OK", status)
         data = json.loads(body)
         self.assertTrue(data["p_ops_enabled"])
+        self.assertFalse(data["triage_shadow_enabled"])
         self.assertNotIn("password", data)
 
     def test_daily_preview_runs_once_per_mountain_day(self):
@@ -102,6 +127,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(any(row[0] == "daily_preview" for row in first))
         self.assertFalse(any(row[0] == "daily_preview" for row in second))
         self.assertEqual(1, notion.reads)
+
+    def test_shadow_triage_records_read_only_decision_once(self):
+        cfg = dict(self.cfg, triage_shadow=True)
+        event = {"event_id": "Ev1", "team_id": "T1", "channel": "C1", "ts": "123.456",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        notion, triage = FakeNotion(), FakeTriage()
+        clients = {"slack_capture": FakeCaptureClient(), "notion": notion, "triage": triage}
+        first = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        second = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        self.assertTrue(any(row[0] == "triage_shadow" and row[2] == "shadow" for row in first))
+        self.assertFalse(any(row[0] == "triage_shadow" for row in second))
+        self.assertEqual(1, triage.calls)
+        saved = self.stores[5].rows()
+        self.assertEqual("shadow", saved[0]["state"])
+        guarded = json.loads(saved[0]["decision_json"])
+        self.assertFalse(guarded["executable"])
+        self.assertIn("pilot_shadow_mode", guarded["policy_reasons"])
 
 
 if __name__ == "__main__":

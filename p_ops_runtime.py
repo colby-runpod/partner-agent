@@ -23,6 +23,8 @@ from p_ops_capture import CaptureStore, SlackCaptureClient, accept_reaction, loa
 from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, apply_ready, preview
+from p_ops_shadow import ShadowLedger, run_shadow
+from p_ops_triage import ResponsesTriageClient
 
 
 REVIEW_STATES = ("needs_review", "approved", "send_authorized", "review", "conflict")
@@ -42,6 +44,7 @@ def config(env=None):
         "review_password": env.get("P_OPS_REVIEW_PASSWORD", ""),
         "csrf_secret": env.get("P_OPS_CSRF_SECRET", ""),
         "daily_review": env.get("P_OPS_DAILY_REVIEW_ENABLED") == "true",
+        "triage_shadow": env.get("P_OPS_TRIAGE_SHADOW_ENABLED") == "true",
     })
     if cfg["runtime_enabled"] and not all((cfg["review_user"], cfg["review_password"], cfg["csrf_secret"])):
         raise ValueError("Set P_OPS_REVIEW_USER, P_OPS_REVIEW_PASSWORD, and P_OPS_CSRF_SECRET.")
@@ -113,9 +116,9 @@ def _card(title, state, body, buttons=""):
 
 
 class Dashboard:
-    def __init__(self, cfg, capture, inbox, messages, linear, notion):
+    def __init__(self, cfg, capture, inbox, messages, linear, notion, triage):
         self.cfg, self.capture, self.inbox = cfg, capture, inbox
-        self.messages, self.linear, self.notion = messages, linear, notion
+        self.messages, self.linear, self.notion, self.triage = messages, linear, notion, triage
 
     def render(self):
         sections = []
@@ -168,6 +171,24 @@ class Dashboard:
                        _button(self.cfg, "notion", "reject", row["id"], "Reject")) if row["state"] == "needs_review" else ""
             cards.append(_card(row["title"], row["state"], plan.get("reason", ""), buttons))
         sections.append("<section><h2>Task updates</h2>%s</section>" % ("".join(cards) or "<p>Nothing pending.</p>"))
+
+        cards = []
+        for row in self.triage.rows(("shadow", "error")):
+            if row["decision_json"]:
+                guarded = json.loads(row["decision_json"])
+                decision = guarded["decision"]
+                body = (decision["summary"] + "\n\nDisposition: " + decision["disposition"] +
+                        "\nReview required: " + str(guarded["review_required"]) +
+                        "\nPolicy: " + ", ".join(guarded["policy_reasons"]) +
+                        "\nViolations: " + (", ".join(guarded["violations"]) or "none"))
+                title = decision["title"]
+            else:
+                bundle = json.loads(row["bundle_json"])
+                title = bundle["source"].get("text", "Shadow triage")[:120]
+                body = row["error"] or "Triage failed."
+            cards.append(_card(title, row["state"] + " - read only", body))
+        sections.append("<section><h2>Shadow triage</h2>%s</section>" %
+                        ("".join(cards) or "<p>Nothing analyzed.</p>"))
         return "".join(sections)
 
     def action(self, kind, action, item_id):
@@ -196,7 +217,8 @@ class RuntimeApp:
         path, method = env.get("PATH_INFO"), env.get("REQUEST_METHOD")
         if path == "/healthz" and method == "GET":
             return respond("200 OK", json.dumps({"status": "listening", "p_ops_enabled": self.cfg["runtime_enabled"],
-                                                  "capture_enabled": self.cfg["enabled"]}))
+                                                  "capture_enabled": self.cfg["enabled"],
+                                                  "triage_shadow_enabled": self.cfg.get("triage_shadow", False)}))
         if not self.cfg["runtime_enabled"]:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
@@ -231,20 +253,20 @@ def components(cfg):
     path = cfg["db"]
     capture, inbox = CaptureStore(path), InboxLedger(path)
     messages, linear = ApprovalLedger(path), LinearLedger(path)
-    notion = NotionLedger(path)
-    return capture, inbox, messages, linear, notion
+    notion, triage = NotionLedger(path), ShadowLedger(path)
+    return capture, inbox, messages, linear, notion, triage
 
 
 def create_app():
     cfg = config()
-    capture, inbox, messages, linear, notion = components(cfg)
-    dashboard = Dashboard(cfg, capture, inbox, messages, linear, notion)
+    capture, inbox, messages, linear, notion, triage = components(cfg)
+    dashboard = Dashboard(cfg, capture, inbox, messages, linear, notion, triage)
     slack_app = Application(cfg, capture, accept_reaction)
     return RuntimeApp(cfg, dashboard, slack_app)
 
 
 def run_once(cfg, stores, clients=None, today=None):
-    capture, inbox, messages, linear, notion = stores
+    capture, inbox, messages, linear, notion, triage_ledger = stores
     clients = clients or {}
     results = []
     for row in capture.rows(("pending",))[:10]:
@@ -252,6 +274,11 @@ def run_once(cfg, stores, clients=None, today=None):
         results.append(("capture", row["event_id"], resolve_capture(capture, row["event_id"], client)))
     for row in capture.rows(("captured",)):
         inbox.propose(row)
+    if cfg.get("triage_shadow"):
+        notion_client = clients.get("notion") or NotionClient()
+        triage_client = clients.get("triage") or ResponsesTriageClient()
+        shadow_rows = run_shadow(inbox, triage_ledger, notion_client, triage_client, current_date=today)
+        results.extend(("triage_shadow", item_id, state) for item_id, state in shadow_rows)
     if os.environ.get("P_OPS_NOTION_CREATE") == "true":
         client = clients.get("notion") or NotionClient()
         for row in inbox.rows(("approved",)):
