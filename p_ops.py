@@ -42,6 +42,7 @@ class TaskEvidence:
     objective: str = ""
     workstream: str = ""
     partner: str = ""
+    child_actions_unverified: bool = False
     requires_engineering: bool = False
     linear_issue_url: str = ""
     linear_team: str = ""
@@ -112,6 +113,14 @@ def plan_task(task: TaskEvidence) -> TaskPlan:
                         "Closed tasks are preserved and never reopened automatically.",
                         bool(actions), (), actions, linear, "")
 
+    completion_guards = (task.active_dependency, task.unresolved_commitment, task.material_risk,
+                         task.someone_waiting, task.future_trigger)
+    if task.completion_evidence.strip() and (task.child_actions_unverified or any(
+            value.strip() for value in completion_guards)):
+        return TaskPlan(task.task_id, task.status, task.status, False,
+                        "Completion evidence exists, but child actions, dependencies, commitments, risks, or waiting stakeholders still require validation.",
+                        True, missing, ("validate_completion_before_close",), linear, "")
+
     if task.completion_evidence.strip():
         return TaskPlan(task.task_id, task.status, "Done", True,
                         "Completion evidence confirms the intended outcome.", False,
@@ -121,6 +130,12 @@ def plan_task(task: TaskEvidence) -> TaskPlan:
         return TaskPlan(task.task_id, task.status, "Dropped", True,
                         "The task is a duplicate of the recorded canonical task.", False,
                         (), ("link_canonical_task", "record_drop_reason"), linear, "Duplicate")
+
+    if task.explicit_drop_evidence.strip() and any(value.strip() for value in (
+            task.unresolved_commitment, task.material_risk, task.someone_waiting)):
+        return TaskPlan(task.task_id, task.status, task.status, False,
+                        "The work was deprioritized, but an unresolved commitment, risk, or waiting stakeholder requires closure review.",
+                        True, missing, ("validate_drop_before_close",), linear, "")
 
     if task.explicit_drop_evidence.strip():
         return TaskPlan(task.task_id, task.status, "Dropped", True,

@@ -99,6 +99,27 @@ class TaskGovernanceTests(unittest.TestCase):
         self.assertEqual(patch["Closed At"], TODAY.isoformat())
         self.assertEqual(patch["Completion Evidence"], source.completion_evidence)
 
+    def test_completion_with_open_context_requires_review(self):
+        source = task(completion_evidence="Work appears complete", child_actions_unverified=True)
+        plan = plan_task(source)
+        self.assertEqual(plan.proposed_status, "In Progress")
+        self.assertFalse(plan.auto_update_allowed)
+        self.assertTrue(plan.review_required)
+        self.assertIn("validate_completion_before_close", plan.actions)
+
+    def test_completion_with_waiting_stakeholder_requires_review(self):
+        source = task(completion_evidence="Artifact delivered", someone_waiting="Partner awaiting confirmation")
+        plan = plan_task(source)
+        self.assertEqual(plan.proposed_status, "In Progress")
+        self.assertTrue(plan.review_required)
+
+    def test_drop_with_commitment_requires_review(self):
+        source = task(explicit_drop_evidence="Deprioritized", unresolved_commitment="Partner was promised an answer")
+        plan = plan_task(source)
+        self.assertEqual(plan.proposed_status, "In Progress")
+        self.assertTrue(plan.review_required)
+        self.assertIn("validate_drop_before_close", plan.actions)
+
     def test_waiting_patch_starts_clock(self):
         source = task(active_dependency="Legal approval")
         patch = notion_patch(source, plan_task(source))
