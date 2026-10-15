@@ -129,13 +129,40 @@ class LinearLedger:
             raise KeyError(action_id)
         return dict(row)
 
+    def rows(self, states=None):
+        with self.connect() as db:
+            if states:
+                marks = ",".join("?" for _ in states)
+                rows = db.execute("SELECT * FROM p_ops_linear_actions WHERE state IN (%s) ORDER BY created" % marks,
+                                  tuple(states)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM p_ops_linear_actions ORDER BY created").fetchall()
+        return [dict(row) for row in rows]
+
     def approve(self, action_id):
         row = self.get(action_id)
         if row["state"] != "needs_review":
             raise ValueError("Linear draft is not waiting for review.")
         with self.connect() as db:
-            db.execute("UPDATE p_ops_linear_actions SET state='approved',approved_hash=draft_hash,approved=? WHERE id=?",
-                       (time.time(), action_id))
+            changed = db.execute("""UPDATE p_ops_linear_actions SET state='approved',approved_hash=draft_hash,approved=?
+                WHERE id=? AND state='needs_review' AND draft_hash=?""",
+                (time.time(), action_id, row["draft_hash"])).rowcount
+        if not changed:
+            raise ValueError("Linear draft changed before approval.")
+
+    def reject(self, action_id):
+        with self.connect() as db:
+            changed = db.execute("""UPDATE p_ops_linear_actions SET state='rejected',error='rejected_by_operator'
+                WHERE id=? AND state IN ('needs_review','approved')""", (action_id,)).rowcount
+        if not changed:
+            raise ValueError("Linear draft cannot be rejected from its current state.")
+
+    def claim(self, action_id, approved_hash):
+        with self.connect() as db:
+            changed = db.execute("""UPDATE p_ops_linear_actions SET state='checking',attempted=?,error=NULL
+                WHERE id=? AND state='approved' AND approved_hash=? AND draft_hash=?""",
+                (time.time(), action_id, approved_hash, approved_hash)).rowcount
+        return changed == 1
 
     def state(self, action_id, state, **fields):
         allowed = {"attempted", "completed", "issue_id", "issue_url", "error"}
@@ -154,13 +181,19 @@ def create_approved_issue(client, ledger, action_id):
     current_hash = draft_hash(row["team_id"], row["title"], row["description"], row["source_url"])
     if row["state"] != "approved" or row["approved_hash"] != current_hash:
         raise ValueError("Approve the exact current Linear draft before creation.")
-    duplicates = client.find_by_source(row["source_url"])
+    if not ledger.claim(action_id, row["approved_hash"]):
+        raise ValueError("Linear approval changed before creation.")
+    try:
+        duplicates = client.find_by_source(row["source_url"])
+    except Exception:
+        ledger.state(action_id, "review", error="duplicate_check_failed_no_create")
+        return "review"
     if duplicates:
         issue = duplicates[0]
         ledger.state(action_id, "duplicate", completed=time.time(), issue_id=issue.get("id"),
                      issue_url=issue.get("url"), error="existing_issue_found")
         return "duplicate"
-    ledger.state(action_id, "creating", attempted=time.time())
+    ledger.state(action_id, "creating")
     try:
         issue = client.create_issue(row["team_id"], row["title"], row["description"])
     except Exception:

@@ -61,6 +61,16 @@ class ApprovalLedger:
             raise KeyError(message_id)
         return dict(row)
 
+    def rows(self, states=None):
+        with self.connect() as db:
+            if states:
+                marks = ",".join("?" for _ in states)
+                rows = db.execute("SELECT * FROM p_ops_messages WHERE state IN (%s) ORDER BY created" % marks,
+                                  tuple(states)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM p_ops_messages ORDER BY created").fetchall()
+        return [dict(row) for row in rows]
+
     def revise(self, message_id, *, destination=None, subject=None, content=None):
         row = self.get(message_id)
         destination = row["destination"] if destination is None else destination
@@ -82,17 +92,36 @@ class ApprovalLedger:
         if row["state"] != "needs_review":
             raise ValueError("Message is not waiting for review.")
         with self.connect() as db:
-            db.execute("""UPDATE p_ops_messages SET state='approved',approved_hash=content_hash,
-                approved_at=?,updated=? WHERE id=? AND state='needs_review'""",
-                (time.time(), time.time(), message_id))
+            changed = db.execute("""UPDATE p_ops_messages SET state='approved',approved_hash=content_hash,
+                approved_at=?,updated=? WHERE id=? AND state='needs_review' AND content_hash=?""",
+                (time.time(), time.time(), message_id, row["content_hash"])).rowcount
+        if not changed:
+            raise ValueError("Message changed before approval.")
 
     def authorize_send(self, message_id):
         row = self.get(message_id)
         if row["state"] != "approved" or row["approved_hash"] != row["content_hash"]:
             raise ValueError("Approve the exact current message before authorizing send.")
         with self.connect() as db:
-            db.execute("UPDATE p_ops_messages SET state='send_authorized',send_authorized_at=?,updated=? WHERE id=?",
-                       (time.time(), time.time(), message_id))
+            changed = db.execute("""UPDATE p_ops_messages SET state='send_authorized',send_authorized_at=?,updated=?
+                WHERE id=? AND state='approved' AND approved_hash=? AND content_hash=?""",
+                (time.time(), time.time(), message_id, row["approved_hash"], row["approved_hash"])).rowcount
+        if not changed:
+            raise ValueError("Message approval changed before send authorization.")
+
+    def reject(self, message_id):
+        with self.connect() as db:
+            changed = db.execute("""UPDATE p_ops_messages SET state='rejected',error='rejected_by_operator',updated=?
+                WHERE id=? AND state IN ('needs_review','approved')""", (time.time(), message_id)).rowcount
+        if not changed:
+            raise ValueError("Message cannot be rejected from its current state.")
+
+    def claim_send(self, message_id, approved_hash):
+        with self.connect() as db:
+            changed = db.execute("""UPDATE p_ops_messages SET state='sending',sending_at=?,updated=?,error=NULL
+                WHERE id=? AND state='send_authorized' AND approved_hash=? AND content_hash=?""",
+                (time.time(), time.time(), message_id, approved_hash, approved_hash)).rowcount
+        return changed == 1
 
     def _state(self, message_id, state, **fields):
         allowed = {"sending_at", "sent_at", "external_id", "error"}
@@ -113,7 +142,8 @@ def send_message(ledger, message_id, sender):
         raise ValueError("Message is not authorized to send.")
     if row["approved_hash"] != content_hash(row["kind"], row["destination"], row["subject"], row["content"]):
         raise ValueError("Approved content no longer matches the message.")
-    ledger._state(message_id, "sending", sending_at=time.time(), error=None)
+    if not ledger.claim_send(message_id, row["approved_hash"]):
+        raise ValueError("Message authorization changed before sending.")
     try:
         external_id = sender(row)
     except Exception:

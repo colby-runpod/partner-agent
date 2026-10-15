@@ -87,6 +87,16 @@ class CaptureStore:
             row = db.execute("SELECT * FROM p_ops_captures WHERE event_id=?", (event_id,)).fetchone()
         return dict(row) if row else None
 
+    def rows(self, states=None):
+        with self.connect() as db:
+            if states:
+                marks = ",".join("?" for _ in states)
+                rows = db.execute("SELECT * FROM p_ops_captures WHERE state IN (%s) ORDER BY created" % marks,
+                                  tuple(states)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM p_ops_captures ORDER BY created").fetchall()
+        return [dict(row) for row in rows]
+
     def update(self, event_id, **fields):
         allowed = {"state", "captured_at", "source_url", "source_text", "source_user", "thread_ts", "error"}
         if not fields.keys() <= allowed:

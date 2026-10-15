@@ -207,6 +207,29 @@ class NotionClient:
         return self.request("PATCH", "https://api.notion.com/v1/pages/" + str(uuid.UUID(page_id)),
                             {"properties": encode_patch(patch)})
 
+    def find_by_context(self, source_url):
+        result = self.request("POST", "https://api.notion.com/v1/data_sources/%s/query" % self.data_source_id,
+                              {"page_size": 10, "filter": {"property": "Context",
+                               "rich_text": {"contains": source_url}}})
+        return result.get("results", [])
+
+    def create_inbox(self, fields):
+        """Create only the bounded Inbox shape used by approved Slack captures."""
+        properties = {
+            "Item": {"title": _rich(fields["title"])},
+            "Status": {"status": {"name": "Inbox"}},
+            "Context": {"rich_text": _rich(fields["context"])},
+            "Next Step": {"rich_text": _rich(fields["next_step"])},
+            "Review Required": {"checkbox": True},
+            "Review Reason": {"rich_text": _rich(fields["review_reason"])},
+        }
+        page = self.request("POST", "https://api.notion.com/v1/pages",
+                            {"parent": {"type": "data_source_id", "data_source_id": self.data_source_id},
+                             "properties": properties})
+        if not page.get("id") or not page.get("url"):
+            raise RemoteError("Notion did not confirm task creation")
+        return page
+
 
 class Ledger:
     def __init__(self, path):
@@ -257,6 +280,13 @@ class Ledger:
         with self.connect() as db:
             changed = db.execute("UPDATE p_ops_actions SET state='approved', approved=? "
                                  "WHERE id=? AND state='needs_review'", (time.time(), action_id)).rowcount
+        if not changed:
+            raise ValueError("Action is not waiting for approval: " + action_id)
+
+    def reject(self, action_id):
+        with self.connect() as db:
+            changed = db.execute("UPDATE p_ops_actions SET state='rejected', error='rejected_by_operator' "
+                                 "WHERE id=? AND state='needs_review'", (action_id,)).rowcount
         if not changed:
             raise ValueError("Action is not waiting for approval: " + action_id)
 

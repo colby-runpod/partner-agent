@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from p_ops_notion import Ledger, apply_action, apply_ready, changed_patch, encode_patch, normalize_page, preview, snapshot
+from p_ops_notion import Ledger, NotionClient, apply_action, apply_ready, changed_patch, encode_patch, normalize_page, preview, snapshot
 
 
 TODAY = dt.date(2026, 10, 14)
@@ -160,6 +160,20 @@ class NotionAdapterTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 with self.assertRaisesRegex(ValueError, "P_OPS_NOTION_WRITE"):
                     apply_ready(FakeClient(page()), ledger, include_auto=True)
+
+    def test_inbox_create_uses_bounded_working_task_shape(self):
+        calls = []
+        client = NotionClient(token="token")
+        client.request = lambda method, url, payload=None: (calls.append((method, url, payload)) or
+            {"id": "11111111-1111-1111-1111-111111111111", "url": "https://notion.so/task"})
+        result = client.create_inbox({"title": "Captured task", "context": "Source context",
+            "next_step": "Triage it", "review_reason": "Needs review"})
+        self.assertEqual("https://notion.so/task", result["url"])
+        props = calls[0][2]["properties"]
+        self.assertEqual("Inbox", props["Status"]["status"]["name"])
+        self.assertTrue(props["Review Required"]["checkbox"])
+        self.assertNotIn("Due Date", props)
+        self.assertNotIn("Priority", props)
 
 
 if __name__ == "__main__":

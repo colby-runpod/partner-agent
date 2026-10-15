@@ -19,6 +19,9 @@ The Partner Ops expansion is a deliberately isolated, disabled-by-default founda
 - [`p_ops_capture.py`](p_ops_capture.py) accepts only Colby's allowlisted Slack `:handshake::skin-tone-2:` reactions in allowlisted channels, verifies Slack signatures, and stores the exact reacted message as untrusted source evidence. It does not create a task or send a reply.
 - [`p_ops_approval.py`](p_ops_approval.py) separates message drafting, exact-content approval, and explicit send authorization. Editing the content or destination invalidates approval. An uncertain send is held for review and is never retried automatically.
 - [`p_ops_linear.py`](p_ops_linear.py) drafts bounded Linear issues, searches by the source Notion URL before creation, and requires explicit approval plus a separate write gate. It cannot set priority, assignment, due dates, projects, or roadmap commitments.
+- [`p_ops_inbox.py`](p_ops_inbox.py) turns a verified Slack capture into a conservative, duplicate-checked Working Tasks Inbox proposal. The proposal must be reviewed before the separate Notion creation gate can execute it.
+- [`p_ops_runtime.py`](p_ops_runtime.py) connects the queues through one locked worker and a protected `/review` dashboard. It can schedule one daily Notion preview per America/Denver day without treating routine checks as meaningful task activity.
+- [`P_OPS_DEPLOYMENT.md`](P_OPS_DEPLOYMENT.md) contains the isolated pilot deployment and validation order. The existing Slack chat service is not changed.
 
 Run the p-OPS safety tests with:
 
@@ -26,6 +29,7 @@ Run the p-OPS safety tests with:
 python3 -m unittest test_p_ops.py -v
 python3 -m unittest test_p_ops_notion.py -v
 python3 -m unittest test_p_ops_capture.py test_p_ops_approval.py test_p_ops_linear.py -v
+python3 -m unittest test_p_ops_inbox.py test_p_ops_runtime.py -v
 ```
 
 Preview the live queue without writing:
@@ -49,6 +53,7 @@ All new capabilities are off unless their individual gate is exactly `true`:
 
 - `P_OPS_CAPTURE_ENABLED` accepts Slack capture events. `P_OPS_CAPTURE_CHANNEL_IDS` and `P_OPS_CAPTURE_USER_IDS` are required comma-separated allowlists.
 - `P_OPS_NOTION_WRITE` permits approved Notion actions.
+- `P_OPS_NOTION_CREATE` permits an approved, duplicate-checked Inbox proposal to become a Working Task.
 - `P_OPS_LINEAR_WRITE` permits an approved Linear draft to be created after a duplicate search.
 - `P_OPS_SEND_MESSAGES` permits a separately approved and send-authorized Slack or email draft to be delivered through an injected sender.
 

@@ -1,0 +1,108 @@
+import base64
+import datetime as dt
+import io
+import json
+import tempfile
+import unittest
+import urllib.parse
+
+from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, run_once
+
+
+CFG = {"runtime_enabled": True, "enabled": True, "team_id": "T1", "app_id": "A1", "secret": "secret",
+       "channel_ids": {"C1"}, "user_ids": {"U1"}, "review_user": "colby",
+       "review_password": "password", "csrf_secret": "csrf", "daily_review": False}
+
+
+def request(app, path, method="GET", body=b"", auth=True):
+    status, headers = [], []
+    env = {"PATH_INFO": path, "REQUEST_METHOD": method, "CONTENT_LENGTH": str(len(body)),
+           "wsgi.input": io.BytesIO(body)}
+    if auth:
+        env["HTTP_AUTHORIZATION"] = "Basic " + base64.b64encode(b"colby:password").decode()
+    def start(value, values): status.append(value); headers.extend(values)
+    output = b"".join(app(env, start))
+    return status[0], dict(headers), output
+
+
+class FakeSlackApp:
+    def __call__(self, env, start):
+        start("200 OK", [("Content-Length", "2")]); return [b"{}"]
+
+
+class FakeCaptureClient:
+    def message(self, channel, ts):
+        return {"ts": ts, "user": "U2", "text": "Prepare Redis follow-up"}
+    def permalink(self, channel, ts):
+        return "https://slack.example/source"
+
+
+class FakeNotion:
+    def __init__(self): self.reads = 0
+    def active_pages(self):
+        self.reads += 1
+        return []
+
+
+class RuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = dict(CFG, db=self.tmp.name + "/p_ops.sqlite3")
+        self.stores = components(self.cfg)
+        self.dashboard = Dashboard(self.cfg, *self.stores)
+        self.app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp())
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dashboard_requires_auth_and_escapes_source(self):
+        status, headers, _ = request(self.app, "/review", auth=False)
+        self.assertEqual("401 Unauthorized", status)
+        self.assertIn("WWW-Authenticate", headers)
+        message_id = self.stores[2].create("slack", "C1", "<script>alert(1)</script>")
+        status, headers, body = request(self.app, "/review")
+        self.assertEqual("200 OK", status)
+        self.assertNotIn(b"<script>alert(1)</script>", body)
+        self.assertIn(b"&lt;script&gt;", body)
+        self.assertEqual("no-store", headers["Cache-Control"])
+
+    def test_csrf_protected_review_action(self):
+        message_id = self.stores[2].create("slack", "C1", "Ready to send")
+        bad = urllib.parse.urlencode({"kind": "message", "action": "approve", "id": message_id,
+                                      "csrf": "bad"}).encode()
+        self.assertEqual("403 Forbidden", request(self.app, "/review/action", "POST", bad)[0])
+        good = urllib.parse.urlencode({"kind": "message", "action": "approve", "id": message_id,
+            "csrf": _csrf(self.cfg, "message", "approve", message_id)}).encode()
+        self.assertEqual("303 See Other", request(self.app, "/review/action", "POST", good)[0])
+        self.assertEqual("approved", self.stores[2].get(message_id)["state"])
+
+    def test_worker_resolves_capture_and_creates_one_proposal(self):
+        event = {"event_id": "Ev1", "team_id": "T1", "channel": "C1", "ts": "123.456",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        results = run_once(self.cfg, self.stores, {"slack_capture": FakeCaptureClient()})
+        self.assertEqual("captured", results[0][2])
+        self.assertEqual(1, len(self.stores[1].rows()))
+        run_once(self.cfg, self.stores, {"slack_capture": FakeCaptureClient()})
+        self.assertEqual(1, len(self.stores[1].rows()))
+
+    def test_health_reports_disabled_gates_without_exposing_secrets(self):
+        status, _, body = request(self.app, "/healthz", auth=False)
+        self.assertEqual("200 OK", status)
+        data = json.loads(body)
+        self.assertTrue(data["p_ops_enabled"])
+        self.assertNotIn("password", data)
+
+    def test_daily_preview_runs_once_per_mountain_day(self):
+        cfg = dict(self.cfg, daily_review=True)
+        notion = FakeNotion()
+        day = dt.date(2026, 10, 15)
+        first = run_once(cfg, self.stores, {"notion": notion}, today=day)
+        second = run_once(cfg, self.stores, {"notion": notion}, today=day)
+        self.assertTrue(any(row[0] == "daily_preview" for row in first))
+        self.assertFalse(any(row[0] == "daily_preview" for row in second))
+        self.assertEqual(1, notion.reads)
+
+
+if __name__ == "__main__":
+    unittest.main()
