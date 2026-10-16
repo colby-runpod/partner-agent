@@ -233,7 +233,7 @@ TRIAGE_SCHEMA = {
         "assumptions": {"type": "array", "items": {"type": "string"}},
         "missing_evidence": {"type": "array", "items": {"type": "string"}},
         "review_reasons": {"type": "array", "items": {"type": "string"}},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence": {"type": "number"},
         "rationale": {"type": "string"},
     },
     "required": list(TriageDecision.__dataclass_fields__),

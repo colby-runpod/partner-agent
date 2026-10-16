@@ -50,6 +50,10 @@ class TriageTests(unittest.TestCase):
         raw = decision()
         raw.pop("rationale")
         with self.assertRaises(ValueError): TriageDecision.from_dict(raw)
+
+    def test_confidence_range_is_enforced_by_application_validation(self):
+        with self.assertRaisesRegex(ValueError, "between zero and one"):
+            TriageDecision.from_dict(decision(confidence=1.1))
         raw = decision(extra="bad")
         with self.assertRaises(ValueError): TriageDecision.from_dict(raw)
 
