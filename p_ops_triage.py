@@ -253,48 +253,44 @@ Provide the best next action, definition of done, evidence references, assumptio
 This is a recommendation only. Never claim that an action was executed."""
 
 
-class ResponsesTriageClient:
+class ClaudeTriageClient:
     def __init__(self, api_key=None, model=None, opener=None):
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        self.model = model or os.environ.get("P_OPS_MODEL", "")
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "")
         self.opener = opener or urllib.request.urlopen
         if not self.api_key or not self.model:
-            raise ValueError("Set OPENAI_API_KEY and P_OPS_MODEL before model triage.")
+            raise ValueError("Set ANTHROPIC_API_KEY and ANTHROPIC_MODEL before model triage.")
 
     def analyze(self, bundle):
-        payload = {"model": self.model, "store": False, "instructions": TRIAGE_INSTRUCTIONS,
-                   "input": json.dumps(bundle, sort_keys=True), "max_output_tokens": 5000,
-                   "text": {"format": {"type": "json_schema", "name": "p_ops_triage",
-                                        "strict": True, "schema": TRIAGE_SCHEMA}}}
-        request = urllib.request.Request("https://api.openai.com/v1/responses", method="POST",
-            data=json.dumps(payload).encode(), headers={"Authorization": "Bearer " + self.api_key,
+        payload = {"model": self.model, "max_tokens": 5000, "system": TRIAGE_INSTRUCTIONS,
+                   "messages": [{"role": "user", "content": json.dumps(bundle, sort_keys=True)}],
+                   "output_config": {"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}}}
+        request = urllib.request.Request("https://api.anthropic.com/v1/messages", method="POST",
+            data=json.dumps(payload).encode(), headers={"x-api-key": self.api_key,
+                                                        "anthropic-version": "2023-06-01",
                                                         "Content-Type": "application/json"})
         try:
             with self.opener(request, timeout=90) as response:
                 result = json.load(response)
         except urllib.error.HTTPError as exc:
-            raise ValueError("OpenAI triage HTTP %d" % exc.code) from None
+            raise ValueError("Claude triage HTTP %d" % exc.code) from None
         except (OSError, ValueError, TimeoutError):
-            raise ValueError("OpenAI triage response unavailable") from None
-        if result.get("status") != "completed":
-            raise ValueError("OpenAI triage response was incomplete")
-        texts, refusal = [], False
-        for item in result.get("output") or []:
-            for content in item.get("content") or []:
-                refusal = refusal or content.get("type") == "refusal"
-                if content.get("type") == "output_text":
-                    texts.append(content.get("text", ""))
-        if refusal or not texts:
-            raise ValueError("OpenAI triage did not return a usable decision")
+            raise ValueError("Claude triage response unavailable") from None
+        if result.get("stop_reason") != "end_turn":
+            raise ValueError("Claude triage response was incomplete")
+        texts = [item.get("text", "") for item in result.get("content") or []
+                 if item.get("type") == "text"]
+        if not texts:
+            raise ValueError("Claude triage did not return a usable decision")
         try:
             return TriageDecision.from_dict(json.loads("".join(texts)))
         except (ValueError, TypeError, json.JSONDecodeError):
-            raise ValueError("OpenAI triage output failed application validation") from None
+            raise ValueError("Claude triage output failed application validation") from None
 
 
 def triage(bundle, client=None, pilot=True):
     source = bundle.get("source") or {}
     if not source.get("id") or not source.get("text"):
         raise ValueError("Triage requires a source ID and source text.")
-    decision = (client or ResponsesTriageClient()).analyze(bundle)
+    decision = (client or ClaudeTriageClient()).analyze(bundle)
     return guard_decision(decision, bundle, pilot=pilot)

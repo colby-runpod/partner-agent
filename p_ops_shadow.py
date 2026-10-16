@@ -153,6 +153,13 @@ class ShadowLedger:
                 rows = db.execute("SELECT * FROM p_ops_triage_shadow ORDER BY created").fetchall()
         return [dict(row) for row in rows]
 
+    def get(self, item_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM p_ops_triage_shadow WHERE id=?", (item_id,)).fetchone()
+        if not row:
+            raise KeyError(item_id)
+        return dict(row)
+
 
 def run_shadow(inbox, ledger, notion_client, triage_client, current_date=None):
     """Analyze each unseen review proposal and persist a non-executable result."""

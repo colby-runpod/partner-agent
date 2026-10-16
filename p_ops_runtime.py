@@ -23,8 +23,9 @@ from p_ops_capture import CaptureStore, SlackCaptureClient, accept_reaction, loa
 from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, apply_ready, preview
+from p_ops_notifications import ReviewNotificationLedger
 from p_ops_shadow import ShadowLedger, run_shadow
-from p_ops_triage import ResponsesTriageClient
+from p_ops_triage import ClaudeTriageClient
 
 
 REVIEW_STATES = ("needs_review", "approved", "send_authorized", "review", "conflict")
@@ -45,9 +46,15 @@ def config(env=None):
         "csrf_secret": env.get("P_OPS_CSRF_SECRET", ""),
         "daily_review": env.get("P_OPS_DAILY_REVIEW_ENABLED") == "true",
         "triage_shadow": env.get("P_OPS_TRIAGE_SHADOW_ENABLED") == "true",
+        "review_posting": env.get("P_OPS_REVIEW_POSTING_ENABLED") == "true",
+        "review_channel": env.get("P_OPS_REVIEW_CHANNEL_ID", ""),
     })
     if cfg["runtime_enabled"] and not all((cfg["review_user"], cfg["review_password"], cfg["csrf_secret"])):
         raise ValueError("Set P_OPS_REVIEW_USER, P_OPS_REVIEW_PASSWORD, and P_OPS_CSRF_SECRET.")
+    if cfg["review_posting"] and not cfg["review_channel"]:
+        raise ValueError("Set P_OPS_REVIEW_CHANNEL_ID before enabling review posting.")
+    if cfg["review_posting"] and not env.get("SLACK_BOT_TOKEN"):
+        raise ValueError("Set SLACK_BOT_TOKEN before enabling review posting.")
     return cfg
 
 
@@ -83,6 +90,24 @@ class SlackSender:
             "parse": "none", "unfurl_links": False, "unfurl_media": False})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm message delivery.")
+        return result["ts"]
+
+
+class SlackReviewSender:
+    def __init__(self, expected_channel, token=None):
+        self.expected_channel = expected_channel
+        self.token = token or os.environ.get("SLACK_BOT_TOKEN", "")
+        if not self.expected_channel or not self.token:
+            raise ValueError("Review channel and Slack bot token are required.")
+
+    def __call__(self, row):
+        if row["channel"] != self.expected_channel:
+            raise ValueError("Review notification destination is not authorized.")
+        result = api("https://slack.com/api/chat.postMessage", self.token, {
+            "channel": self.expected_channel, "text": row["content"], "mrkdwn": False,
+            "parse": "none", "unfurl_links": False, "unfurl_media": False})
+        if not result.get("ts"):
+            raise ValueError("Slack did not confirm review notification delivery.")
         return result["ts"]
 
 
@@ -218,7 +243,9 @@ class RuntimeApp:
         if path == "/healthz" and method == "GET":
             return respond("200 OK", json.dumps({"status": "listening", "p_ops_enabled": self.cfg["runtime_enabled"],
                                                   "capture_enabled": self.cfg["enabled"],
-                                                  "triage_shadow_enabled": self.cfg.get("triage_shadow", False)}))
+                                                  "triage_shadow_enabled": self.cfg.get("triage_shadow", False),
+                                                  "review_posting_enabled": self.cfg.get("review_posting", False),
+                                                  "review_channel_configured": bool(self.cfg.get("review_channel"))}))
         if not self.cfg["runtime_enabled"]:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
@@ -276,9 +303,22 @@ def run_once(cfg, stores, clients=None, today=None):
         inbox.propose(row)
     if cfg.get("triage_shadow"):
         notion_client = clients.get("notion") or NotionClient()
-        triage_client = clients.get("triage") or ResponsesTriageClient()
+        triage_client = clients.get("triage") or ClaudeTriageClient()
         shadow_rows = run_shadow(inbox, triage_ledger, notion_client, triage_client, current_date=today)
         results.extend(("triage_shadow", item_id, state) for item_id, state in shadow_rows)
+        notifications = ReviewNotificationLedger(cfg["db"])
+        for item_id, item_state in shadow_rows:
+            if item_state != "shadow":
+                continue
+            row = triage_ledger.get(item_id)
+            guarded = json.loads(row["decision_json"])
+            if guarded.get("review_required") and cfg.get("review_channel"):
+                notifications.queue(row, cfg.get("review_channel", ""))
+        if cfg.get("review_posting"):
+            sender = clients.get("review_sender") or SlackReviewSender(cfg["review_channel"])
+            for row in notifications.rows(("queued",)):
+                results.append(("review_notification", row["triage_id"],
+                                notifications.publish(row["triage_id"], cfg["review_channel"], sender)))
     if os.environ.get("P_OPS_NOTION_CREATE") == "true":
         client = clients.get("notion") or NotionClient()
         for row in inbox.rows(("approved",)):

@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from p_ops_triage import ResponsesTriageClient, guard_decision
+from p_ops_triage import ClaudeTriageClient, guard_decision
 
 
 REQUIRED_CASE_FIELDS = {"id", "name", "provenance", "source", "expected"}
@@ -109,7 +109,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("output/p_ops_triage_eval.json"))
     args = parser.parse_args()
     cases = load_cases(args.cases)
-    report = summary(cases, run_live(cases, ResponsesTriageClient()) if args.live else None)
+    report = summary(cases, run_live(cases, ClaudeTriageClient()) if args.live else None)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

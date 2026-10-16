@@ -30,6 +30,19 @@ The runtime provides:
 11. Connect Linear with least privilege. Keep creation review-required during the pilot.
 12. Enable outbound messages last. Email delivery is not implemented in this runtime. Slack drafts require exact-content approval and a second send-authorization action.
 
+## Internal review notifications
+
+Set `P_OPS_REVIEW_CHANNEL_ID` to one approved internal Slack channel. Keep
+`P_OPS_REVIEW_POSTING_ENABLED=false` until a shadow decision has been inspected.
+When enabled, p-OPS may post only its generated review cards to that exact
+channel. This narrow gate does not enable general outbound messages and does
+not bypass `P_OPS_SEND_MESSAGES` for drafts or external communications.
+
+Review-card delivery is exactly-once. An uncertain Slack response moves the
+notification to review and is never retried automatically. Reactions and
+threaded replies are visible feedback only in this release; automated feedback
+ingestion remains disabled until Slack event routing is configured and tested.
+
 ## Important boundaries
 
 - Approval does not bypass an execution gate.

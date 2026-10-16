@@ -12,7 +12,8 @@ from p_ops_triage import TriageDecision
 
 CFG = {"runtime_enabled": True, "enabled": True, "team_id": "T1", "app_id": "A1", "secret": "secret",
        "channel_ids": {"C1"}, "user_ids": {"U1"}, "review_user": "colby",
-       "review_password": "password", "csrf_secret": "csrf", "daily_review": False}
+       "review_password": "password", "csrf_secret": "csrf", "daily_review": False,
+       "review_posting": False, "review_channel": "C-REVIEW"}
 
 
 def request(app, path, method="GET", body=b"", auth=True):
@@ -66,6 +67,13 @@ class FakeTriage:
             "review_reasons": [], "confidence": 0.83,
             "rationale": "The action is specific, but the shadow bundle is intentionally incomplete.",
         })
+
+
+class FakeReviewSender:
+    def __init__(self): self.rows = []
+    def __call__(self, row):
+        self.rows.append(row)
+        return "171.001"
 
 
 class RuntimeTests(unittest.TestCase):
@@ -145,6 +153,22 @@ class RuntimeTests(unittest.TestCase):
         guarded = json.loads(saved[0]["decision_json"])
         self.assertFalse(guarded["executable"])
         self.assertIn("pilot_shadow_mode", guarded["policy_reasons"])
+
+    def test_shadow_triage_posts_one_scoped_review_notification(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=True)
+        event = {"event_id": "Ev2", "team_id": "T1", "channel": "C1", "ts": "456.789",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        sender = FakeReviewSender()
+        clients = {"slack_capture": FakeCaptureClient(), "notion": FakeNotion(),
+                   "triage": FakeTriage(), "review_sender": sender}
+        first = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        second = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        self.assertTrue(any(row[0] == "review_notification" and row[2] == "sent" for row in first))
+        self.assertFalse(any(row[0] == "review_notification" for row in second))
+        self.assertEqual(1, len(sender.rows))
+        self.assertEqual("C-REVIEW", sender.rows[0]["channel"])
+        self.assertIn("Review needed:", sender.rows[0]["content"])
 
 
 if __name__ == "__main__":

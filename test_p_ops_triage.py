@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 from p_ops_eval import bundle_from_case, load_cases, score_case, summary
-from p_ops_triage import ResponsesTriageClient, TriageDecision, guard_decision
+from p_ops_triage import ClaudeTriageClient, TriageDecision, guard_decision
 
 
 def decision(**changes):
@@ -67,10 +67,10 @@ class TriageTests(unittest.TestCase):
         guarded = guard_decision(decision(disposition="merge_task", canonical_task_id="unknown"), BUNDLE)
         self.assertIn("canonical_task_not_in_evidence", guarded.violations)
 
-    def test_responses_client_parses_schema_valid_output(self):
-        payload = {"status": "completed", "output": [{"content": [
-            {"type": "output_text", "text": json.dumps(decision())}]}]}
-        client = ResponsesTriageClient("key", "model", opener=lambda request, timeout: Response(payload))
+    def test_claude_client_parses_schema_valid_output(self):
+        payload = {"stop_reason": "end_turn", "content": [
+            {"type": "text", "text": json.dumps(decision())}]}
+        client = ClaudeTriageClient("key", "model", opener=lambda request, timeout: Response(payload))
         self.assertEqual("create_task", client.analyze(BUNDLE).disposition)
 
     def test_eval_corpus_has_25_valid_cases_and_history(self):
