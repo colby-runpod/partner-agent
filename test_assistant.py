@@ -351,5 +351,84 @@ class ContextTests(unittest.TestCase):
             self.assertEqual(w.created[0][1], 'slack:C09UGSU62R4:1792167034.178459')
 
 
+
+class WeeklyFlagTests(unittest.TestCase):
+    TASK = 'https://app.notion.com/p/GCP-3-Start-GCP-Producer-Portal-listing-setup-397ff732fc34816fb9edc28efbb44273'
+
+    class FlagWriter(Writer):
+        def __init__(self, not_task=False):
+            super().__init__(); self.flags, self.not_task = [], not_task
+        def flag_weekly(self, page_id, note, today):
+            if self.not_task: raise tasks.NotATask()
+            self.flags.append((page_id, note)); return 'https://www.notion.so/gcp3', 'GCP #3 Start listing'
+
+    def run_agent(self, script, writer):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q')
+            store.enqueue(agent.accept_agent(dict(ASK, event=dict(ASK['event'], text=
+                "<@UBOT> flag this for next week's partnership update"), event_id='EvW'), ACFG))
+            c = Clients(script)
+            with patch.dict('os.environ', {'NOTION_TOKEN': 'x', 'ANTHROPIC_MODEL': 'm'}):
+                agent.process_agent(store, store.next_job(), c, Chat(), ACFG, writer)
+            return c
+
+    def test_flags_existing_task_with_unflag_button(self):
+        w = self.FlagWriter()
+        c = self.run_agent([tool_use('flag_for_weekly', {'page': self.TASK, 'note': 'Suger submitted the listing for review'}),
+                            tool_use('flag_for_weekly', {'page': self.TASK, 'note': 'again'}, 't2'),
+                            final('Flagged GCP #3 for the weekly update.')], w)
+        self.assertEqual(w.flags, [('397ff732-fc34-816f-b9ed-c28efbb44273', 'Suger submitted the listing for review')])
+        self.assertEqual(w.created, [])
+        second = json.loads(c.payloads[2]['messages'][-1]['content'][0]['content'])
+        self.assertTrue(second['already_flagged_this_run'])
+        channel, thread, text, blocks = c.said[0]
+        self.assertIn('_Used: weekly flag_', text)
+        self.assertEqual([b['action_id'] for b in blocks[-1]['elements']], ['task_open', 'task_unflag'])
+        self.assertEqual(blocks[-1]['elements'][1]['value'], '397ff732-fc34-816f-b9ed-c28efbb44273')
+
+    def test_non_task_rows_are_refused(self):
+        c = self.run_agent([tool_use('flag_for_weekly', {'page': self.TASK, 'note': 'x'}), final('ok')],
+                           self.FlagWriter(not_task=True))
+        self.assertIn('Only Working Tasks rows', c.payloads[1]['messages'][-1]['content'][0]['content'])
+        self.assertIsNone(c.said[0][3])
+
+    def test_intent_rules_in_prompt(self):
+        for phrase in ('flag_for_weekly on the EXISTING Working Task', 'Never create a task for this',
+                       'end with one short question instead of guessing', '"track this / remind me'):
+            self.assertIn(phrase, agent.AGENT_INSTRUCTIONS)
+
+    def test_writer_flag_payload(self):
+        w = tasks.TaskWriter(dict(ACFG, tasks_source='e77648f6-502d-450f-8b79-4dd2ced52bab')); calls = []
+        page = {'url': 'https://www.notion.so/gcp3', 'parent': {'type': 'data_source_id',
+                'data_source_id': 'e77648f6-502d-450f-8b79-4dd2ced52bab'}, 'properties': {
+                'Item': {'title': [{'plain_text': 'GCP #3'}]}, 'Context': {'rich_text': [{'plain_text': 'Older context'}]}}}
+        w._req = lambda m, p, payload=None: calls.append((m, p, payload)) or (page if m == 'GET' else {})
+        self.assertEqual(w.flag_weekly('pid', 'Reviews submitted', '2026-10-16'), ('https://www.notion.so/gcp3', 'GCP #3'))
+        props = calls[1][2]['properties']
+        self.assertEqual(props['Weekly'], {'checkbox': True})
+        self.assertEqual(props['Context']['rich_text'][0]['text']['content'], '10/16 weekly: Reviews submitted\nOlder context')
+        page['parent'] = {'data_source_id': 'other'}
+        with self.assertRaises(tasks.NotATask):
+            w.flag_weekly('pid', 'x', '2026-10-16')
+        w.unflag('pid')
+        self.assertEqual(calls[-1][2], {'properties': {'Weekly': {'checkbox': False}}})
+
+    def test_unflag_button(self):
+        class W:
+            def __init__(self): self.unflagged = []
+            def unflag(self, pid): self.unflagged.append(pid)
+        payload = dict(type='block_actions', team={'id': 'T1'}, api_app_id='A1', user={'id': 'U1'}, channel={'id': 'C1'},
+                       message={'ts': '71.1', 'text': 'Flagged GCP #3'}, response_url='https://hooks.slack.com/a/b',
+                       actions=[{'action_id': 'task_unflag', 'value': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 'action_ts': '72.1'}])
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q'); store.enqueue(tasks.accept_task_action(payload, ACFG))
+            w = W(); updates = []
+            c = type('C', (), {'update_blocks': lambda self, *a: updates.append(a), 'ephemeral': lambda self, *a: None})()
+            tasks.process_task_action(store, store.next_job(), c, w)
+        self.assertEqual(w.unflagged, ['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'])
+        self.assertIn('Weekly flag removed by <@U1>', updates[0][2])
+        self.assertEqual([b['action_id'] for b in updates[0][3][-1]['elements']], ['task_open'])
+
+
 if __name__ == '__main__':
     unittest.main()

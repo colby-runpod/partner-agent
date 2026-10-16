@@ -48,8 +48,18 @@ How to work:
 - Tools: read_thread (the Slack thread you were asked in), notion_search and notion_get (Runpod's Partners,
   Partner Biz Dev intake, Working Tasks, Partner Program Applications, Objectives and Workstreams databases),
   web_search (public facts about a company or person), create_task (adds one row to Working Tasks).
-- Use create_task only when Colby asks for a task, follow-up, reminder or to-do, or when the ask clearly is
-  "track this". Check first that it isn't already tracked if that is plausible. Never create more than one.
+- Do exactly what Colby asked, nothing more. Map his words to one action:
+  - "flag / tag / note / mention / include this in the (next week's / weekly) partnership update", "++weekly",
+    a pin emoji: flag_for_weekly on the EXISTING Working Task that tracks the topic. Never create a task for this.
+    If several rows fit, flag the most specific open one (a task over its parent). If none fits, say so and ask
+    whether to create one.
+  - "track this / remind me / follow up / add a task / to-do": create_task, after checking nothing already
+    tracks it. Never create more than one.
+  - "process / log / update / reflect / record" on an existing item: you can't edit rows yet (other than the
+    Weekly flag). Say exactly what to change, on which row, as the recommended next step.
+  - "review / summarize / what do you think / what's the status": answer only, no writes.
+  - If the ask combines several of these, do each allowed part. If you can't tell which action he wants, do the
+    read-only part and end with one short question instead of guessing.
 - You cannot send email or Slack messages, update existing rows, change HubSpot, or approve anything. If the
   ask needs one of those, do every part you can, then say in one line what is left and that it needs Colby
   (or a later bot feature). Never claim you did something you did not do.
@@ -80,6 +90,13 @@ TOOLS = [
     {'name': 'notion_get', 'description': 'Open one Notion row by URL or ID: all filled fields plus the start of '
      'its page body.', 'input_schema': {'type': 'object', 'required': ['page'], 'properties': {
          'page': {'type': 'string'}}}},
+    {'name': 'flag_for_weekly', 'description': 'Flag an EXISTING Working Tasks row for the weekly Partnerships '
+     'update: ticks its Weekly box (the update pulls these into "Flagged this week") and adds a dated one-line '
+     'progress note to its Context. Use this when Colby asks to flag, tag, note or include something in the '
+     'weekly or next partnership update. Find the row with notion_search (database tasks) first.',
+     'input_schema': {'type': 'object', 'required': ['page', 'note'], 'properties': {
+         'page': {'type': 'string', 'description': 'URL or ID of the Working Tasks row.'},
+         'note': {'type': 'string', 'description': 'One line on the progress to report, facts only.'}}}},
     {'name': 'create_task', 'description': 'Create one Working Tasks row for Colby (Status Inbox, Review Required) '
      'from the forwarded message or thread. Returns its URL, or the existing task if this message is already tracked.',
      'input_schema': {'type': 'object', 'required': ['item', 'next_step'], 'properties': {
@@ -169,7 +186,7 @@ def row_summary(page, limit=25):
 class Tools:
     def __init__(self, cfg, event, clients, chat_clients, writer):
         self.cfg, self.event, self.clients, self.chat, self.writer = cfg, event, clients, chat_clients, writer
-        self.calls, self.used, self.created, self.schemas = 0, [], [], {}
+        self.calls, self.used, self.created, self.schemas, self.flagged = 0, [], [], {}, []
 
     def _notion(self, method, path, payload=None):
         return api('https://api.notion.com/v1/' + path, os.environ['NOTION_TOKEN'], payload, version=NOTION_VERSION)
@@ -242,6 +259,22 @@ class Tools:
                 body.append(line[:300])
         data['body'] = '\n'.join(body)[:2500]
         return data
+
+    def tool_flag_for_weekly(self, page, note=''):
+        if self.writer is None:
+            return {'error': 'Notion writing is off (NOTION_WRITE or TASKS_ENABLED).'}
+        match = PAGE_ID.search(str(page).replace('-', '')[-40:]) or PAGE_ID.search(str(page))
+        if not match:
+            return {'error': 'That is not a Notion page URL or ID.'}
+        page_id = '-'.join(match.groups())
+        if any(f[1] == page_id for f in self.flagged):
+            return {'already_flagged_this_run': True}
+        try:
+            url, title = self.writer.flag_weekly(page_id, note, dt.date.today().isoformat())
+        except tasks.NotATask:
+            return {'error': 'Only Working Tasks rows carry the Weekly flag. Flag the task that tracks this instead.'}
+        self.flagged.append((url, page_id, title))
+        return {'flagged': True, 'title': title, 'url': url}
 
     def tool_create_task(self, **draft):
         if self.writer is None:
@@ -425,14 +458,16 @@ def footer(tools):
         return ''
     counts = {}
     for name in tools.used:
-        if name != 'create_task':  # Counted below only when a task was actually created.
+        if name not in ('create_task', 'flag_for_weekly'):  # Counted below only when they actually wrote.
             counts[name] = counts.get(name, 0) + 1
     if tools.created:
         counts['create_task'] = 1
+    if tools.flagged:
+        counts['flag_for_weekly'] = len(tools.flagged)
     if not counts:
         return ''
     label = {'read_thread': 'thread', 'notion_search': 'Notion search', 'notion_get': 'Notion row',
-             'create_task': 'task created'}
+             'create_task': 'task created', 'flag_for_weekly': 'weekly flag'}
     return '\n_Used: %s_' % ', '.join('%s%s' % (label.get(n, n), ' x%d' % c if c > 1 else '') for n, c in counts.items())
 
 
@@ -447,9 +482,16 @@ def process_agent(store, job, clients, chat_clients, cfg, writer):
     except Exception as exc:
         print('Agent run failed: %s' % type(exc).__name__, flush=True)
         text = ("I couldn't finish that. Nothing was changed%s. Try again in a minute, or ask something narrower."
-                % (' except the task I created: <%s|open it>' % tools.created[0][0] if tools.created else ''))
+                % (' except the task I created: <%s|open it>' % tools.created[0][0] if tools.created else
+                   ' except the Weekly flag on <%s|%s>' % (tools.flagged[0][0], tools.flagged[0][2]) if tools.flagged else ''))
     text = '<@%s> %s' % (event['user'], text)
-    blocks = tasks.reply_blocks(text, *tools.created[0]) if tools.created else None
+    blocks = None
+    if tools.created:
+        blocks = tasks.reply_blocks(text, *tools.created[0])
+    elif tools.flagged:
+        url, page_id, _ = tools.flagged[0]
+        blocks = tasks.reply_blocks(text, url or 'https://www.notion.so/' + page_id.replace('-', ''), page_id,
+                                    drop=False, unflag=True)
     try:
         clients.say_blocks(event['channel'], event['thread_ts'], text, blocks)
     except Exception:
