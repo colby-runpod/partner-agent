@@ -15,7 +15,7 @@ import urllib.parse
 import uuid
 
 from p_ops_eval import load_cases, summary
-from p_ops_notion import FIELDS, _property
+from p_ops_notion import FIELDS, RemoteError, _property
 from p_ops_shadow import _candidate, _shortlist
 from p_ops_triage import guard_decision
 
@@ -63,7 +63,16 @@ def bundle_from_text(title, context, current_date=None):
 
 def bundle_from_notion_url(value, notion_client, current_date=None):
     page_id = notion_page_id(value)
-    page = notion_client.page(page_id)
+    try:
+        page = notion_client.page(page_id)
+    except RemoteError as exc:
+        if str(exc) == "Notion HTTP 404":
+            raise ValueError(
+                "The p-OPS Notion integration cannot access this task. "
+                "Connect the Working Tasks database to the Notion integration whose token is "
+                "stored in Railway as NOTION_TOKEN, then try again."
+            ) from None
+        raise
     task = _candidate(page)
     title = task.get("title") or "Untitled Working Task"
     source_text = "\n".join(filter(None, (
@@ -75,7 +84,17 @@ def bundle_from_notion_url(value, notion_client, current_date=None):
         "Owner: " + str(_property(page, FIELDS["owner"]) or "Not provided"),
         "Work mode: " + str(_property(page, FIELDS["work_mode"]) or "Not provided"),
     )))
-    active = [candidate for candidate in notion_client.active_pages() if candidate.get("id") != page.get("id")]
+    try:
+        active = [candidate for candidate in notion_client.active_pages()
+                  if candidate.get("id") != page.get("id")]
+    except RemoteError as exc:
+        if str(exc) == "Notion HTTP 404":
+            raise ValueError(
+                "The p-OPS Notion integration can read this task but cannot access the Working Tasks database. "
+                "Connect that database to the Notion integration whose token is stored in Railway as "
+                "NOTION_TOKEN, then try again."
+            ) from None
+        raise
     related = _shortlist(active, source_text)
     objective_ids = task.get("objective_ids") or []
     workstream_ids = task.get("workstream_ids") or []

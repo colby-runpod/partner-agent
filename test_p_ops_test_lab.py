@@ -1,6 +1,12 @@
 import unittest
 
-from p_ops_test_lab import notion_page_id
+from p_ops_notion import RemoteError
+from p_ops_test_lab import bundle_from_notion_url, notion_page_id
+
+
+class InaccessibleNotionClient:
+    def page(self, _):
+        raise RemoteError("Notion HTTP 404")
 
 
 class TestLabUrlTests(unittest.TestCase):
@@ -17,6 +23,13 @@ class TestLabUrlTests(unittest.TestCase):
     def test_invalid_value_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "valid Notion task URL"):
             notion_page_id("https://app.notion.com/p/runpod/not-a-page")
+
+    def test_inaccessible_page_explains_how_to_fix_the_connection(self):
+        with self.assertRaisesRegex(ValueError, "Connect the Working Tasks database"):
+            bundle_from_notion_url(
+                "https://app.notion.com/p/runpod/SoftServe-f4ba99ddef5d42d99d9ec92638415199",
+                InaccessibleNotionClient(),
+            )
 
 
 if __name__ == "__main__":

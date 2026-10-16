@@ -427,10 +427,10 @@ class Dashboard:
                        "<input type='hidden' name='action' value='evaluate_notion'>"
                        "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='task_url'>Notion task URL</label>"
                        "<input id='task_url' name='task_url' type='url' required placeholder='https://app.notion.com/p/runpod/...'></div>"
-                       "<span class='form-note'>Notion connection: %s · Claude: %s</span>"
+                       "<span class='form-note'>Notion token: %s · Claude: %s</span>"
                        "<button %s>Evaluate task</button></form></section>" %
                        (html.escape(new_tokens["evaluate_notion"], quote=True),
-                        "ready" if notion_ready else "not configured", "ready" if model_ready else "not configured",
+                        "configured" if notion_ready else "not configured", "ready" if model_ready else "not configured",
                         "" if notion_ready and model_ready else "disabled"))
         text_form = ("<section class='lab-panel'><h2>Evaluate pasted context</h2>"
                      "<p>Use this for Slack, email, meeting, or hypothetical work that is not yet a Working Task.</p>"
