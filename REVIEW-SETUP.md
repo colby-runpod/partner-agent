@@ -183,6 +183,32 @@ capped at 8 model turns and 10 tool calls, and is never retried.
 
 "review" and "flag this as a task" keep their own fast paths.
 
+### Full context for forwards
+
+When you forward a message, the agent (and task capture) opens the **whole
+original thread** through the forward's link, resolves who each person is
+(name, title, external or not), and reads up to 4 screenshots from your
+message, the forward or the thread. Every reply ends with a *Recommended next
+step*, and the agent checks Working Tasks before suggesting a new task.
+
+To read threads in channels the bot isn't in (private channels, Slack Connect,
+other workspaces), give it a read-only Slack **user** token for your account:
+
+1. In the Team Partner Agent app, open **OAuth & Permissions**, then **User
+   Token Scopes**, and add `channels:history`, `groups:history`,
+   `mpim:history`, `files:read` and `users:read`. Leave out `im:history`
+   unless you want DMs readable.
+2. **Reinstall to Workspace** (admins may need to approve) and authorize as
+   yourself. Copy the **User OAuth Token** (`xoxp-...`).
+3. In Railway, set `SLACK_USER_TOKEN` to it. `/healthz` shows
+   `slack_user_token: true`.
+
+The user token is only used for `conversations.replies`, `users.info` and
+image downloads from `files.slack.com`, only for threads you forward or ask
+in. It never posts. Without it, the bot token is used, which only reaches
+channels the bot is in. If a thread can't be opened, the reply says it only
+saw the forwarded text.
+
 Setup: share every database listed above with the Notion integration, then set
 `AGENT_ENABLED=true`. Try it in one channel first by setting
 `AGENT_CHANNEL_IDS` to that channel.
@@ -261,7 +287,7 @@ expect more "unverified".
   behind it.
 - `/healthz` shows `review_enabled`, `review_mode`, `web_search`,
   `notion_lookup`, `summary_enabled`, `summary_hour`, `interactive`,
-  `notion_write`, `tasks_enabled` and `agent_enabled`.
+  `notion_write`, `tasks_enabled`, `agent_enabled` and `slack_user_token`.
 - The instructions are prompt-cached, which lowers the cost of each review.
 - Railway logs print `Review queued digest <ts>` for each digest picked up. A
   digest-looking post from an unexpected bot prints its `bot_id` so you can add

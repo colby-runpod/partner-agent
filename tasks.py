@@ -83,9 +83,30 @@ def forwarded(event):
             source_id = 'slack:%s:%s' % (att['channel_id'], att['ts'])
         else:
             source_id = ''
+        channel, ts = (match.group(1), '%s.%s' % match.group(2, 3)) if match else (
+            str(att.get('channel_id', '')), str(att.get('ts', '')))
+        thread = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get('thread_ts', [''])[0] if match else ''
+        thread = thread or str(att.get('thread_ts') or '')
+        ok = re.fullmatch(r'[CGD]\w+', channel) and re.fullmatch(r'\d+\.\d+', ts)
         return {'text': text[:8000], 'author': _strip(att.get('author_name') or att.get('author_subname'))[:80],
-                'link': link if match else '', 'source_id': source_id}
+                'link': link if match else '', 'source_id': source_id,
+                'channel': channel if ok else '', 'ts': ts if ok else '',
+                'thread_ts': thread if ok and re.fullmatch(r'\d+\.\d+', thread) else (ts if ok else ''),
+                'files': file_refs(att.get('files'))}
     return None
+
+
+def file_refs(files):
+    """Image attachments worth showing to Claude: Slack-hosted, small, at most 4."""
+    out = []
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        url, kind = str(f.get('url_private') or ''), str(f.get('mimetype') or '')
+        if kind in ('image/png', 'image/jpeg', 'image/gif', 'image/webp') and re.match(r'https://files\.slack\.com/', url) \
+                and int(f.get('size') or 0) <= 4_500_000:
+            out.append({'url': url, 'mimetype': kind, 'name': _strip(f.get('name'))[:80]})
+    return out[:4]
 
 
 def accept_task(body, cfg):
@@ -309,6 +330,14 @@ def process_task(store, job, clients, cfg, writer, now=None):
     try:
         if forward and forward.get('text'):
             source, author = forward['text'], forward.get('author', '')
+            if forward.get('channel') and forward.get('thread_ts'):
+                try:  # Full original thread when Colby's read token (or the bot) can see it.
+                    import assistant
+                    messages, _ = assistant.Context(cfg).thread(forward['channel'], forward['thread_ts'])
+                    source = json.dumps({'forwarded_message': source, 'original_thread': messages},
+                                        ensure_ascii=False)[:9000]
+                except Exception:
+                    pass
             source_id = forward.get('source_id') or 'slack:%s:%s' % (event['channel'], event['ts'])
             link = forward.get('link') or clients.permalink(event['channel'], event['ts'])
         elif thread != event['ts']:

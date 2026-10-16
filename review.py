@@ -327,6 +327,7 @@ def create_app():
                                'notion_write': cfg.get('notion_write', False),
                                'tasks_enabled': cfg.get('tasks_enabled', False),
                                'agent_enabled': cfg.get('agent_enabled', False),
+                               'slack_user_token': bool(os.environ.get('SLACK_USER_TOKEN')),
                                'intake_enabled': False}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
