@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from p_ops_notion import Ledger, NotionClient, apply_action, apply_ready, changed_patch, encode_patch, normalize_page, preview, snapshot
+from p_ops_notion import ACTIVE, Ledger, NotionClient, apply_action, apply_ready, changed_patch, encode_patch, normalize_page, preview, snapshot
 
 
 TODAY = dt.date(2026, 10, 14)
@@ -27,7 +27,7 @@ def date(value):
 def page(**changes):
     properties = {
         "Item": {"type": "title", "title": [{"plain_text": "Example task", "text": {"content": "Example task"}}]},
-        "Status": select("status", "In Progress"), "Accountable Owner": {"type": "people", "people": [{"id": "u1", "name": "Colby"}]},
+        "Status": select("select", "In Progress"), "Accountable Owner": {"type": "people", "people": [{"id": "u1", "name": "Colby"}]},
         "Next Step": rich("Review evidence"), "Next Step Date": date("2026-10-14"), "Due Date": date("2026-10-20"),
         "Definition of Done": rich("Outcome confirmed"), "Completion Evidence": rich(""),
         "Close Reason": select("select", ""), "Closed At": date(None), "Last Meaningful Activity": date("2026-10-14"),
@@ -78,7 +78,7 @@ class FakeClient:
 class NotionAdapterTests(unittest.TestCase):
     def test_normalize_is_conservative(self):
         source = page(**{
-            "Status": select("status", "Snoozed"), "Next Step Date": date("2026-11-01"),
+            "Status": select("select", "Snoozed"), "Next Step Date": date("2026-11-01"),
             "Owning Function": select("select", "Product"), "Dependency Context": rich("Old dependency")})
         task = normalize_page(source, TODAY)
         self.assertEqual(task.snooze_until, dt.date(2026, 11, 1))
@@ -88,7 +88,7 @@ class NotionAdapterTests(unittest.TestCase):
         self.assertEqual(task.linear_team, "Product")
 
     def test_waiting_dependency_is_used(self):
-        source = page(**{"Status": select("status", "Waiting on Other"), "Dependency Context": rich("Legal approval")})
+        source = page(**{"Status": select("select", "Waiting on Other"), "Dependency Context": rich("Legal approval")})
         self.assertEqual(normalize_page(source, TODAY).active_dependency, "Legal approval")
 
     def test_child_actions_prevent_unverified_parent_close(self):
@@ -99,7 +99,7 @@ class NotionAdapterTests(unittest.TestCase):
 
     def test_patch_encoder_rejects_unknown_fields(self):
         encoded = encode_patch({"Status": "Done", "Review Required": True, "Linear Issue": "https://linear.app/x"})
-        self.assertEqual(encoded["Status"]["status"]["name"], "Done")
+        self.assertEqual(encoded["Status"]["select"]["name"], "Done")
         with self.assertRaises(ValueError):
             encode_patch({"Due Date": "2026-10-20"})
 
@@ -170,10 +170,21 @@ class NotionAdapterTests(unittest.TestCase):
             "next_step": "Triage it", "review_reason": "Needs review"})
         self.assertEqual("https://notion.so/task", result["url"])
         props = calls[0][2]["properties"]
-        self.assertEqual("Inbox", props["Status"]["status"]["name"])
+        self.assertEqual("Inbox", props["Status"]["select"]["name"])
         self.assertTrue(props["Review Required"]["checkbox"])
         self.assertNotIn("Due Date", props)
         self.assertNotIn("Priority", props)
+
+    def test_active_pages_filters_the_live_select_status_property(self):
+        calls = []
+        client = NotionClient(token="token")
+        client.request = lambda method, url, payload=None: (
+            calls.append((method, url, payload)) or {"results": [], "has_more": False}
+        )
+        self.assertEqual([], client.active_pages())
+        filters = calls[0][2]["filter"]["or"]
+        self.assertEqual(len(filters), len(ACTIVE))
+        self.assertTrue(all("select" in item and "status" not in item for item in filters))
 
 
 if __name__ == "__main__":
