@@ -7,6 +7,9 @@
   const commandItems = Array.from(document.querySelectorAll("[data-command-item]"));
   const notificationButton = document.querySelector("[data-notification-button]");
   const notificationPanel = document.querySelector("[data-notification-panel]");
+  const taskQueueSearch = document.querySelector("[data-task-queue-search]");
+  const taskStatusFilter = document.querySelector("[data-task-status-filter]");
+  const taskQueueItems = Array.from(document.querySelectorAll("[data-task-queue-item]"));
 
   function openPalette() {
     if (!palette) return;
@@ -41,8 +44,24 @@
     notificationButton.setAttribute("aria-expanded", "false");
   }
 
+  function filterTaskQueue() {
+    const query = (taskQueueSearch && taskQueueSearch.value || "").trim().toLowerCase();
+    const status = taskStatusFilter && taskStatusFilter.value || "";
+    let visible = 0;
+    taskQueueItems.forEach(function (item) {
+      const matchesQuery = !query || (item.dataset.query || "").includes(query);
+      const matchesStatus = !status || item.dataset.status === status;
+      item.hidden = !(matchesQuery && matchesStatus);
+      if (!item.hidden) visible += 1;
+    });
+    const empty = document.querySelector("[data-task-queue-empty]");
+    if (empty) empty.classList.toggle("visible", visible === 0);
+  }
+
   if (commandButton) commandButton.addEventListener("click", openPalette);
   if (commandInput) commandInput.addEventListener("input", filterCommands);
+  if (taskQueueSearch) taskQueueSearch.addEventListener("input", filterTaskQueue);
+  if (taskStatusFilter) taskStatusFilter.addEventListener("change", filterTaskQueue);
   if (palette) {
     palette.addEventListener("click", function (event) {
       if (event.target === palette || event.target.closest("[data-close-command]")) closePalette();

@@ -22,11 +22,11 @@ from p_ops_approval import ApprovalLedger, send_message
 from p_ops_capture import CaptureStore, SlackCaptureClient, accept_reaction, load_capture_config, resolve_capture
 from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
-from p_ops_notion import Ledger as NotionLedger, NotionClient, apply_ready, preview
+from p_ops_notion import Ledger as NotionLedger, NotionClient, RemoteError, apply_ready, preview
 from p_ops_notifications import ReviewNotificationLedger
 from p_ops_shadow import ShadowLedger, run_shadow
-from p_ops_test_lab import (TestLabLedger, bundle_from_notion_url, bundle_from_text,
-                            evaluate_bundle, validate_corpus)
+from p_ops_test_lab import (TestLabLedger, active_task_queue, bundle_from_notion_url,
+                            bundle_from_text, evaluate_bundle, validate_corpus)
 from p_ops_triage import ClaudeTriageClient
 
 
@@ -204,6 +204,30 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
 .baseline { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .baseline-metrics { display: flex; flex-wrap: wrap; gap: 8px; }
 .baseline-metrics span { padding: 6px 9px; border-radius: 6px; background: #f3f2f8; color: #50525c; font-size: 11px; }
+.task-queue { margin-bottom: 28px; }
+.task-queue-tools { display: grid; grid-template-columns: minmax(220px,1fr) minmax(150px,.35fr); gap: 10px; margin: 17px 0 14px; }
+.task-search, .task-filter { width: 100%; min-height: 38px; padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: 7px; outline: 0; background: white; color: var(--text); font-size: 12px; }
+.task-search:focus, .task-filter:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(93,41,240,.10); }
+.task-queue-summary { color: var(--subtle); font-size: 11px; white-space: nowrap; }
+.task-queue-list { display: grid; gap: 8px; max-height: 590px; overflow-y: auto; padding-right: 3px; }
+.task-queue-item { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 18px; align-items: center; padding: 14px 15px; border: 1px solid var(--border); border-radius: 8px; background: #fcfcfe; }
+.task-queue-item:hover { border-color: #cec8e8; background: #faf9ff; }
+.task-queue-item[hidden] { display: none; }
+.task-queue-item.reviewed { background: #fafafa; }
+.task-queue-main { min-width: 0; }
+.task-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.task-title-row a { color: var(--text); font-size: 13px; font-weight: 650; text-decoration: none; overflow-wrap: anywhere; }
+.task-title-row a:hover { color: var(--purple); text-decoration: underline; }
+.task-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.task-meta span { padding: 3px 6px; border-radius: 5px; background: #f0f0f4; color: #5d5f68; font-size: 10px; }
+.task-meta .overdue { background: var(--red-soft); color: var(--red); font-weight: 650; }
+.task-meta .reviewed-badge { background: var(--green-soft); color: var(--green); }
+.task-next { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.task-queue-actions { min-width: 96px; text-align: right; }
+.task-queue-actions form { margin: 0; }
+.task-queue-actions button { width: 100%; }
+.task-queue-empty { display: none; margin-top: 8px; }
+.task-queue-empty.visible { display: grid; }
 .modal-open { overflow: hidden; }
 .command-overlay { position: fixed; z-index: 50; inset: 0; padding: 10vh 18px 18px; background: rgba(24,22,31,.44); backdrop-filter: blur(2px); }
 .command-overlay[hidden] { display: none; }
@@ -247,6 +271,9 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
   .lab-grid { grid-template-columns: 1fr; }
   .lab-panel.full { grid-column: auto; }
   .feedback-form { grid-template-columns: 1fr; }
+  .task-queue-tools, .task-queue-item { grid-template-columns: 1fr; }
+  .task-queue-actions { text-align: left; }
+  .task-queue-actions button { width: auto; }
   .card-head { flex-direction: column; gap: 9px; }
   .notification-panel { position: fixed; top: 62px; right: 10px; left: 10px; width: auto; }
   .activity-row { grid-template-columns: 1fr; gap: 6px; }
@@ -407,12 +434,68 @@ class Dashboard:
         self.messages, self.linear, self.notion, self.triage = messages, linear, notion, triage
         self.test_lab = test_lab or TestLabLedger(cfg["db"])
 
-    def test_lab_content(self):
+    def test_lab_content(self, task_pages=None, queue_error=""):
         corpus = validate_corpus(Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl")
         model_ready = bool(os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("ANTHROPIC_MODEL"))
         notion_ready = bool(os.environ.get("NOTION_TOKEN"))
         new_tokens = {action: _csrf(self.cfg, "test_lab", action, "new")
                       for action in ("validate", "evaluate_notion", "evaluate_text")}
+        queue_items = active_task_queue(task_pages, self.test_lab.evaluated_source_ids())
+        status_options = sorted({item["status"] for item in queue_items})
+        queue_rows = []
+        for item in queue_items[:100]:
+            meta = [item["status"]]
+            if item["work_mode"]:
+                meta.append(item["work_mode"])
+            if item["owner"]:
+                meta.append(item["owner"])
+            if item["next_step_date"]:
+                meta.append("Next: " + item["next_step_date"])
+            if item["due_date"]:
+                meta.append("Due: " + item["due_date"])
+            meta_html = "".join(
+                "<span class='%s'>%s</span>" %
+                ("overdue" if item["overdue"] and (value.startswith("Next:") or value.startswith("Due:")) else "",
+                 html.escape(value)) for value in meta)
+            if item["evaluated"]:
+                meta_html += "<span class='reviewed-badge'>Reviewed</span>"
+            query = " ".join((item["title"], item["status"], item["owner"], item["work_mode"], item["next_step"]))
+            queue_rows.append(
+                "<article class='task-queue-item %s' data-task-queue-item data-status='%s' data-query='%s'>"
+                "<div class='task-queue-main'><div class='task-title-row'><a href='%s' target='_blank' rel='noopener'>%s</a>"
+                "</div><div class='task-meta'>%s</div>%s</div><div class='task-queue-actions'>"
+                "<form class='lab-form' method='post' action='/test-lab/action'>"
+                "<input type='hidden' name='action' value='evaluate_notion'>"
+                "<input type='hidden' name='csrf' value='%s'><input type='hidden' name='task_url' value='%s'>"
+                "<button %s>%s</button></form></div></article>" %
+                ("reviewed" if item["evaluated"] else "", html.escape(item["status"], quote=True),
+                 html.escape(query.lower(), quote=True), html.escape(item["url"], quote=True),
+                 html.escape(item["title"]), meta_html,
+                 "<p class='task-next'>%s</p>" % html.escape(item["next_step"]) if item["next_step"] else "",
+                 html.escape(new_tokens["evaluate_notion"], quote=True), html.escape(item["url"], quote=True),
+                 "" if notion_ready and model_ready else "disabled",
+                 "Re-evaluate" if item["evaluated"] else "Evaluate"))
+        status_filter = "".join("<option value='%s'>%s</option>" %
+                                (html.escape(status, quote=True), html.escape(status))
+                                for status in status_options)
+        reviewed_count = sum(1 for item in queue_items if item["evaluated"])
+        if queue_error:
+            queue_body = _empty("Task queue unavailable", queue_error)
+        elif queue_rows:
+            queue_body = ("<div class='task-queue-tools'><input class='task-search' data-task-queue-search "
+                          "placeholder='Search tasks, owners, next steps...' aria-label='Search active tasks'>"
+                          "<select class='task-filter' data-task-status-filter aria-label='Filter by status'>"
+                          "<option value=''>All statuses</option>%s</select></div>"
+                          "<div class='task-queue-list'>%s</div>"
+                          "<div class='empty task-queue-empty' data-task-queue-empty><div><strong>No matching tasks</strong>"
+                          "Try a different search or status.</div></div>" %
+                          (status_filter, "".join(queue_rows)))
+        else:
+            queue_body = _empty("No active tasks", "There are no active Working Tasks available for review.")
+        queue = ("<section class='lab-panel full task-queue'><div class='section-heading'><div>"
+                 "<h2>Active task review queue</h2><p>Review active Working Tasks in priority order-no link pasting required.</p>"
+                 "</div><span class='task-queue-summary' data-task-queue-count>%d active · %d reviewed</span></div>%s</section>" %
+                 (len(queue_items), reviewed_count, queue_body))
         baseline = ("<section class='lab-panel full'><div class='baseline'><div><h2>Evaluation baseline</h2>"
                     "<p>The deterministic corpus can be validated without calling Claude.</p></div>"
                     "<div class='baseline-metrics'><span>%d cases</span><span>%d historical</span>"
@@ -421,8 +504,8 @@ class Dashboard:
                     "<input type='hidden' name='csrf' value='%s'><button class='secondary'>Validate again</button></form>"
                     "</div></section>" % (corpus["cases"], corpus["historical"], corpus["policy_edge"],
                                            html.escape(new_tokens["validate"], quote=True)))
-        notion_form = ("<section class='lab-panel'><h2>Evaluate a Working Task</h2>"
-                       "<p>Paste a Notion task URL. p-OPS reads that task and related active tasks, then produces a read-only disposition.</p>"
+        notion_form = ("<section class='lab-panel'><h2>Evaluate by URL</h2>"
+                       "<p>Use this fallback for a task that does not appear in the active queue.</p>"
                        "<form class='lab-form' method='post' action='/test-lab/action'>"
                        "<input type='hidden' name='action' value='evaluate_notion'>"
                        "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='task_url'>Notion task URL</label>"
@@ -496,10 +579,10 @@ class Dashboard:
                 "</div><span class='mode-pill'>No external writes</span></div><div class='safety'>"
                 "<div class='safety-copy'><strong>Safe shadow testing</strong><span>Tests may read Notion and call Claude. They cannot update tasks, post to Slack, create Linear issues, or send messages.</span>"
                 "</div><div class='gates'><span class='gate'>Notion writes: off</span><span class='gate'>Messages: off</span>"
-                "<span class='gate'>Execution: off</span></div></div><div class='lab-grid'>%s%s%s</div>%s" %
-                (baseline, notion_form, text_form, history))
+                "<span class='gate'>Execution: off</span></div></div><div class='lab-grid'>%s%s%s%s</div>%s" %
+                (queue, baseline, notion_form, text_form, history))
 
-    def render(self, page="dashboard"):
+    def render(self, page="dashboard", task_pages=None, queue_error=""):
         captures = self.capture.rows(("pending", "resolving", "captured", "review"))
         inbox_rows = self.inbox.rows(REVIEW_STATES)
         message_rows = self.messages.rows(REVIEW_STATES)
@@ -611,7 +694,7 @@ class Dashboard:
         gate_html = "".join("<span class='gate'>%s: %s</span>" %
                             (html.escape(label), "on" if enabled else "off") for label, enabled in gates)
         if page == "test_lab":
-            main_content = self.test_lab_content()
+            main_content = self.test_lab_content(task_pages, queue_error)
         elif page == "settings":
             setting_rows = "".join(
                 "<div class='setting-row'><div class='setting-copy'><strong>%s</strong><span>%s</span></div>"
@@ -822,12 +905,20 @@ class RuntimeApp:
         if path in {"/review", "/activity", "/settings", "/test-lab"} and method == "GET":
             page = {"/review": "dashboard", "/activity": "activity", "/settings": "settings",
                     "/test-lab": "test_lab"}[path]
+            task_pages, queue_error = None, ""
+            if page == "test_lab":
+                try:
+                    task_pages = (self.notion_client or NotionClient()).active_pages()
+                except (ValueError, RemoteError):
+                    task_pages = []
+                    queue_error = "Check the Notion connection, then refresh this page."
             body = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
                     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                     "<meta name='theme-color' content='#5d29f0'><title>Partner ops · Runpod</title>"
                     "<link rel='icon' type='image/png' href='/assets/runpod-icon.png'>"
                     "<style>%s</style><script src='/assets/p_ops_console.js' defer></script></head><body>%s</body></html>" %
-                    (DASHBOARD_CSS, self.dashboard.render(page)))
+                    (DASHBOARD_CSS, self.dashboard.render(page, task_pages=task_pages,
+                                                          queue_error=queue_error)))
             return respond("200 OK", body, "text/html; charset=utf-8",
                            (("Content-Security-Policy", "default-src 'none'; img-src 'self'; script-src 'self'; style-src 'unsafe-inline'; "
                                                        "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"),))

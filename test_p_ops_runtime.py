@@ -40,10 +40,10 @@ class FakeCaptureClient:
 
 
 class FakeNotion:
-    def __init__(self): self.reads = 0
+    def __init__(self, pages=None): self.reads, self.pages = 0, pages or []
     def active_pages(self):
         self.reads += 1
-        return []
+        return self.pages
 
 
 class FakeTriage:
@@ -141,6 +141,26 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("303 See Other", status)
         self.assertTrue(headers["Location"].startswith("/test-lab#"))
         self.assertEqual("corpus", self.dashboard.test_lab.rows()[0]["kind"])
+
+    def test_test_lab_lists_active_tasks_as_one_click_review_queue(self):
+        page = {"id": "task-1", "url": "https://notion.so/task-1", "properties": {
+            "Item": {"type": "title", "title": [{"plain_text": "Review Suger implementation"}]},
+            "Status": {"type": "status", "status": {"name": "In Progress"}},
+            "Next Step": {"type": "rich_text", "rich_text": [{"plain_text": "Confirm onboarding owners"}]},
+            "Accountable Owner": {"type": "people", "people": [{"name": "Colby"}]},
+            "Work Mode": {"type": "select", "select": {"name": "Execute"}},
+            "Due Date": {"type": "date", "date": {"start": "2026-10-17"}},
+        }}
+        notion = FakeNotion([page])
+        app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp(), notion_client=notion)
+        status, _, body = request(app, "/test-lab")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"Active task review queue", body)
+        self.assertIn(b"Review Suger implementation", body)
+        self.assertIn(b"Confirm onboarding owners", body)
+        self.assertIn(b"Search tasks, owners, next steps", body)
+        self.assertIn(b">Evaluate</button>", body)
+        self.assertEqual(1, notion.reads)
 
     def test_test_lab_evaluates_text_and_saves_operator_feedback(self):
         app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp(), triage_client=FakeTriage())
