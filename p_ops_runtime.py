@@ -25,6 +25,8 @@ from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, apply_ready, preview
 from p_ops_notifications import ReviewNotificationLedger
 from p_ops_shadow import ShadowLedger, run_shadow
+from p_ops_test_lab import (TestLabLedger, bundle_from_notion_url, bundle_from_text,
+                            evaluate_bundle, validate_corpus)
 from p_ops_triage import ClaudeTriageClient
 
 
@@ -146,6 +148,7 @@ h1 { margin: 0; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; letter-spa
 .actions form { display: inline; margin: 0; }
 button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--purple); border-radius: 7px; background: var(--purple); color: white; cursor: pointer; font-size: 12px; font-weight: 650; }
 button:hover { background: var(--purple-dark); border-color: var(--purple-dark); }
+button:disabled { border-color: #d8d9df; background: #d8d9df; color: #777985; cursor: not-allowed; }
 button.secondary { border-color: var(--border-strong); background: white; color: #3f4149; }
 button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
 .empty { display: grid; place-items: center; min-height: 98px; padding: 22px; border: 1px dashed var(--border-strong); border-radius: 10px; background: rgba(255,255,255,.45); color: var(--muted); text-align: center; font-size: 13px; }
@@ -177,6 +180,30 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
 .activity-row:last-child { border-bottom: 0; }
 .activity-title strong { display: block; font-size: 13px; }
 .activity-title span, .activity-source { color: var(--muted); font-size: 11px; }
+.lab-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; margin-bottom: 28px; }
+.lab-panel { padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.lab-panel.full { grid-column: 1 / -1; }
+.lab-panel h2 { margin: 0; font-size: 16px; }
+.lab-panel > p { margin: 5px 0 17px; color: var(--muted); font-size: 12px; }
+.lab-form { display: grid; gap: 12px; }
+.field { display: grid; gap: 6px; }
+.field label { color: #3e4048; font-size: 12px; font-weight: 650; }
+.field input, .field textarea, .field select { width: 100%; padding: 10px 11px; border: 1px solid var(--border-strong); border-radius: 7px; outline: 0; background: white; color: var(--text); font-size: 13px; }
+.field textarea { min-height: 124px; resize: vertical; line-height: 1.5; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(93,41,240,.10); }
+.form-note { color: var(--subtle); font-size: 11px; }
+.lab-results { display: grid; gap: 14px; }
+.decision-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 9px; margin: 16px 0; }
+.decision-fact { padding: 10px; border-radius: 7px; background: #f7f7fa; }
+.decision-fact span { display: block; color: var(--subtle); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.decision-fact strong { display: block; margin-top: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.feedback-form { display: grid; grid-template-columns: minmax(150px,.55fr) minmax(220px,1fr) auto; gap: 9px; align-items: end; margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--border); }
+.feedback-form .field { gap: 4px; }
+.feedback-form input, .feedback-form select { padding: 8px 9px; }
+.feedback-saved { display: inline-block; margin-top: 14px; padding: 5px 8px; border-radius: 6px; background: var(--green-soft); color: var(--green); font-size: 11px; font-weight: 650; }
+.baseline { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.baseline-metrics { display: flex; flex-wrap: wrap; gap: 8px; }
+.baseline-metrics span { padding: 6px 9px; border-radius: 6px; background: #f3f2f8; color: #50525c; font-size: 11px; }
 .modal-open { overflow: hidden; }
 .command-overlay { position: fixed; z-index: 50; inset: 0; padding: 10vh 18px 18px; background: rgba(24,22,31,.44); backdrop-filter: blur(2px); }
 .command-overlay[hidden] { display: none; }
@@ -206,6 +233,7 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
   .content { padding: 30px 22px 56px; }
   .metrics, .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .overview-grid { grid-template-columns: 1fr; }
+  .decision-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
 @media (max-width: 600px) {
   .topbar-meta .environment { display: none; }
@@ -216,6 +244,9 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
   .gates { justify-content: flex-start; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
+  .lab-grid { grid-template-columns: 1fr; }
+  .lab-panel.full { grid-column: auto; }
+  .feedback-form { grid-template-columns: 1fr; }
   .card-head { flex-direction: column; gap: 9px; }
   .notification-panel { position: fixed; top: 62px; right: 10px; left: 10px; width: auto; }
   .activity-row { grid-template-columns: 1fr; gap: 6px; }
@@ -362,6 +393,7 @@ def _icon(name):
         "message": "<path d='M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z'/>",
         "linear": "<path d='m16 3 5 5-13 13H3v-5z'/><path d='m15 4 5 5'/>",
         "triage": "<path d='M12 2v4'/><path d='M12 18v4'/><path d='m4.93 4.93 2.83 2.83'/><path d='m16.24 16.24 2.83 2.83'/><path d='M2 12h4'/><path d='M18 12h4'/><circle cx='12' cy='12' r='4'/>",
+        "test": "<path d='M9 3h6'/><path d='M10 9V3h4v6l5 9a2 2 0 0 1-1.75 3H6.75A2 2 0 0 1 5 18z'/><path d='M7.5 15h9'/>",
         "settings": "<circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21h-4v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3v-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3h4v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.12.61.55 1.1 1.15 1.32.15.05.3.08.45.08v4h-.08A1.7 1.7 0 0 0 19.4 15z'/>",
         "search": "<circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/>",
         "bell": "<path d='M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'/><path d='M13.7 21a2 2 0 0 1-3.4 0'/>",
@@ -370,9 +402,102 @@ def _icon(name):
 
 
 class Dashboard:
-    def __init__(self, cfg, capture, inbox, messages, linear, notion, triage):
+    def __init__(self, cfg, capture, inbox, messages, linear, notion, triage, test_lab=None):
         self.cfg, self.capture, self.inbox = cfg, capture, inbox
         self.messages, self.linear, self.notion, self.triage = messages, linear, notion, triage
+        self.test_lab = test_lab or TestLabLedger(cfg["db"])
+
+    def test_lab_content(self):
+        corpus = validate_corpus(Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl")
+        model_ready = bool(os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("ANTHROPIC_MODEL"))
+        notion_ready = bool(os.environ.get("NOTION_TOKEN"))
+        new_tokens = {action: _csrf(self.cfg, "test_lab", action, "new")
+                      for action in ("validate", "evaluate_notion", "evaluate_text")}
+        baseline = ("<section class='lab-panel full'><div class='baseline'><div><h2>Evaluation baseline</h2>"
+                    "<p>The deterministic corpus can be validated without calling Claude.</p></div>"
+                    "<div class='baseline-metrics'><span>%d cases</span><span>%d historical</span>"
+                    "<span>%d policy edges</span><span>Corpus valid</span></div>"
+                    "<form method='post' action='/test-lab/action'><input type='hidden' name='action' value='validate'>"
+                    "<input type='hidden' name='csrf' value='%s'><button class='secondary'>Validate again</button></form>"
+                    "</div></section>" % (corpus["cases"], corpus["historical"], corpus["policy_edge"],
+                                           html.escape(new_tokens["validate"], quote=True)))
+        notion_form = ("<section class='lab-panel'><h2>Evaluate a Working Task</h2>"
+                       "<p>Paste a Notion task URL. p-OPS reads that task and related active tasks, then produces a read-only disposition.</p>"
+                       "<form class='lab-form' method='post' action='/test-lab/action'>"
+                       "<input type='hidden' name='action' value='evaluate_notion'>"
+                       "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='task_url'>Notion task URL</label>"
+                       "<input id='task_url' name='task_url' type='url' required placeholder='https://app.notion.com/p/runpod/...'></div>"
+                       "<span class='form-note'>Notion connection: %s · Claude: %s</span>"
+                       "<button %s>Evaluate task</button></form></section>" %
+                       (html.escape(new_tokens["evaluate_notion"], quote=True),
+                        "ready" if notion_ready else "not configured", "ready" if model_ready else "not configured",
+                        "" if notion_ready and model_ready else "disabled"))
+        text_form = ("<section class='lab-panel'><h2>Evaluate pasted context</h2>"
+                     "<p>Use this for Slack, email, meeting, or hypothetical work that is not yet a Working Task.</p>"
+                     "<form class='lab-form' method='post' action='/test-lab/action'>"
+                     "<input type='hidden' name='action' value='evaluate_text'>"
+                     "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='test_title'>Task or signal</label>"
+                     "<input id='test_title' name='title' maxlength='240' required placeholder='What needs to be evaluated?'></div>"
+                     "<div class='field'><label for='test_context'>Known context and evidence</label>"
+                     "<textarea id='test_context' name='context' maxlength='20000' required placeholder='Include the current state, objective, owner, dependencies, dates, and any known next step.'></textarea></div>"
+                     "<span class='form-note'>Claude: %s · This does not search your workspace.</span>"
+                     "<button %s>Run read-only evaluation</button></form></section>" %
+                     (html.escape(new_tokens["evaluate_text"], quote=True),
+                      "ready" if model_ready else "not configured", "" if model_ready else "disabled"))
+
+        result_cards = []
+        feedback_labels = (("approved", "Approve"), ("too_aggressive", "Too aggressive"),
+                           ("too_cautious", "Too cautious"), ("missing_context", "Missing context"),
+                           ("wrong_disposition", "Wrong disposition"))
+        for row in self.test_lab.rows():
+            result = json.loads(row["result_json"]) if row.get("result_json") else None
+            if row["kind"] == "corpus":
+                body = ("Corpus validation passed.\n\nCases: %d · Historical: %d · Policy edges: %d" %
+                        (result["cases"], result["historical"], result["policy_edge"])) if result else (row.get("error") or "Validation failed.")
+                result_cards.append(_card(row["label"], row["state"], body, kind="Baseline validation"))
+                continue
+            if result:
+                decision = result["decision"]
+                facts = (("Disposition", decision["disposition"]), ("Work mode", decision["work_mode"]),
+                         ("Priority", decision["priority"]), ("Confidence", "%d%%" % round(decision["confidence"] * 100)))
+                fact_html = "".join("<div class='decision-fact'><span>%s</span><strong>%s</strong></div>" %
+                                    (html.escape(label), html.escape(str(value))) for label, value in facts)
+                body = ("<div class='card-body'>%s</div><div class='decision-grid'>%s</div>"
+                        "<div class='card-body'><strong>Next step</strong>\n%s\n\n<strong>Definition of done</strong>\n%s"
+                        "\n\n<strong>Why</strong>\n%s\n\n<strong>Review</strong>\n%s\n\n<strong>Missing evidence</strong>\n%s</div>" %
+                        (html.escape(decision["summary"]), fact_html, html.escape(decision["next_step"]),
+                         html.escape(decision["definition_of_done"]), html.escape(decision["rationale"]),
+                         "Required - " + html.escape(", ".join(result["policy_reasons"])) if result["review_required"] else "Not required",
+                         html.escape(", ".join(decision["missing_evidence"]) or "None")))
+                if row.get("feedback"):
+                    body += "<span class='feedback-saved'>Feedback saved: %s</span>" % html.escape(row["feedback"].replace("_", " "))
+                options = "".join("<option value='%s'>%s</option>" % (value, label) for value, label in feedback_labels)
+                feedback_token = _csrf(self.cfg, "test_lab", "feedback", row["id"])
+                body += ("<form class='feedback-form' method='post' action='/test-lab/action'>"
+                         "<input type='hidden' name='action' value='feedback'><input type='hidden' name='id' value='%s'>"
+                         "<input type='hidden' name='csrf' value='%s'><div class='field'><label>Your assessment</label>"
+                         "<select name='feedback'>%s</select></div><div class='field'><label>One correction, if needed</label>"
+                         "<input name='note' maxlength='2000' placeholder='What should it understand or do differently?'></div>"
+                         "<button>Save feedback</button></form>" %
+                         (html.escape(row["id"], quote=True), html.escape(feedback_token, quote=True), options))
+                result_cards.append("<article class='review-card' id='%s'><div class='card-main'><div class='card-head'>"
+                                    "<div class='card-title'><p class='card-kind'>Read-only test</p><h3>%s</h3></div>"
+                                    "<span class='state state-shadow'>evaluated</span></div>%s</div></article>" %
+                                    (html.escape(row["id"], quote=True), html.escape(row["label"]), body))
+            else:
+                result_cards.append(_card(row["label"], "error", row.get("error") or "Evaluation failed.", kind="Read-only test"))
+        history = ("<section class='queue-section'><div class='section-heading'><div><h2>Recent test runs</h2>"
+                   "<p>Review the decision, then approve it or give one correction.</p></div><span class='section-count'>%d runs</span>"
+                   "</div><div class='lab-results'>%s</div></section>" %
+                   (len(result_cards), "".join(result_cards) if result_cards else _empty(
+                       "No test runs yet", "Evaluate a Working Task or pasted context to begin calibration.")))
+        return ("<div class='hero'><div><p class='eyebrow'>Calibration</p><h1>Test Lab</h1>"
+                "<p class='lede'>See exactly how p-OPS understands work, why it chooses a disposition, and what it would do next.</p>"
+                "</div><span class='mode-pill'>No external writes</span></div><div class='safety'>"
+                "<div class='safety-copy'><strong>Safe shadow testing</strong><span>Tests may read Notion and call Claude. They cannot update tasks, post to Slack, create Linear issues, or send messages.</span>"
+                "</div><div class='gates'><span class='gate'>Notion writes: off</span><span class='gate'>Messages: off</span>"
+                "<span class='gate'>Execution: off</span></div></div><div class='lab-grid'>%s%s%s</div>%s" %
+                (baseline, notion_form, text_form, history))
 
     def render(self, page="dashboard"):
         captures = self.capture.rows(("pending", "resolving", "captured", "review"))
@@ -485,7 +610,9 @@ class Dashboard:
         )
         gate_html = "".join("<span class='gate'>%s: %s</span>" %
                             (html.escape(label), "on" if enabled else "off") for label, enabled in gates)
-        if page == "settings":
+        if page == "test_lab":
+            main_content = self.test_lab_content()
+        elif page == "settings":
             setting_rows = "".join(
                 "<div class='setting-row'><div class='setting-copy'><strong>%s</strong><span>%s</span></div>"
                 "<span class='switch %s' aria-label='%s'></span></div>" %
@@ -554,9 +681,11 @@ class Dashboard:
             for (section_id, label, count), icon in zip(groups, ("capture", "tasks", "message", "linear", "tasks", "triage")))
         page_nav = (
             "<a class='%s' href='/review'><span class='nav-copy'>%s<span>Dashboard</span></span></a>"
-            "<a class='%s' href='/activity'><span class='nav-copy'>%s<span>Activity</span></span></a>" %
+            "<a class='%s' href='/activity'><span class='nav-copy'>%s<span>Activity</span></span></a>"
+            "<a class='%s' href='/test-lab'><span class='nav-copy'>%s<span>Test Lab</span></span></a>" %
             ("active" if page == "dashboard" else "", _icon("dashboard"),
-             "active" if page == "activity" else "", _icon("activity")))
+             "active" if page == "activity" else "", _icon("activity"),
+             "active" if page == "test_lab" else "", _icon("test")))
         settings_nav = "<a class='%s' href='/settings'><span class='nav-copy'>%s<span>Settings</span></span></a>" % (
             "active" if page == "settings" else "", _icon("settings"))
         notifications = [(label, count, section_id) for section_id, label, count in groups if count]
@@ -572,10 +701,12 @@ class Dashboard:
             for item in (
                 ("dashboard home overview", "/review", "Dashboard", "Review queue health and pending actions"),
                 ("activity history recent work", "/activity", "Activity", "See work across every queue"),
+                ("test lab calibration evaluate task", "/test-lab", "Test Lab", "Evaluate live tasks without external writes"),
                 ("settings configuration gates", "/settings", "Settings", "Inspect automation controls and destinations"),
             ) + tuple((label.lower(), "/review#" + section_id, label, "%d current items" % count)
                       for section_id, label, count in groups))
-        title = {"dashboard": "Dashboard", "activity": "Activity", "settings": "Settings"}.get(page, "Dashboard")
+        title = {"dashboard": "Dashboard", "activity": "Activity", "test_lab": "Test Lab",
+                 "settings": "Settings"}.get(page, "Dashboard")
         shell = ("<div class='shell'><aside class='sidebar'><a class='brand' href='/review' aria-label='Runpod partner ops'>"
                  "<img src='/assets/runpod-logo-purple.png' alt='Runpod'></a><p class='nav-label'>Partner ops</p>"
                  "<nav class='nav'>%s<div class='nav-spacer'></div><p class='nav-label'>Work queues</p>%s"
@@ -611,8 +742,47 @@ class Dashboard:
 
 
 class RuntimeApp:
-    def __init__(self, cfg, dashboard, slack_app):
+    def __init__(self, cfg, dashboard, slack_app, triage_client=None, notion_client=None):
         self.cfg, self.dashboard, self.slack_app = cfg, dashboard, slack_app
+        self.triage_client, self.notion_client = triage_client, notion_client
+
+    @staticmethod
+    def _form(env, maximum=65536):
+        size = int(env.get("CONTENT_LENGTH") or 0)
+        if size <= 0 or size > maximum:
+            raise ValueError("Invalid form size.")
+        return {key: values[0] for key, values in urllib.parse.parse_qs(
+            env["wsgi.input"].read(size).decode(), keep_blank_values=True).items()}
+
+    def test_lab_action(self, form):
+        action = form.get("action", "")
+        item_id = form.get("id", "new") if action == "feedback" else "new"
+        if not hmac.compare_digest(form.get("csrf", ""), _csrf(self.cfg, "test_lab", action, item_id)):
+            raise PermissionError("Invalid test token.")
+        ledger = self.dashboard.test_lab
+        if action == "validate":
+            report = validate_corpus(Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl")
+            return ledger.record("corpus", "Evaluation corpus", {"path": "evals/p_ops_triage_cases.jsonl"}, report)
+        if action == "feedback":
+            ledger.feedback(item_id, form.get("feedback", ""), form.get("note", ""))
+            return item_id
+        triage_client = self.triage_client or ClaudeTriageClient()
+        try:
+            if action == "evaluate_text":
+                bundle = bundle_from_text(form.get("title"), form.get("context"))
+                label, kind = form.get("title", "Manual test").strip(), "text"
+            elif action == "evaluate_notion":
+                notion_client = self.notion_client or NotionClient()
+                bundle = bundle_from_notion_url(form.get("task_url", ""), notion_client)
+                label, kind = bundle["source"]["text"].splitlines()[0], "notion"
+            else:
+                raise ValueError("Unsupported test action.")
+            return ledger.record(kind, label, bundle, evaluate_bundle(bundle, triage_client))
+        except Exception as exc:
+            label = (form.get("title") or form.get("task_url") or "Test evaluation").strip()[:240]
+            safe_error = type(exc).__name__ + ": " + str(exc)[:500]
+            return ledger.record("notion" if action == "evaluate_notion" else "text", label,
+                                 {"submitted": label}, error=safe_error)
 
     def __call__(self, env, start):
         def respond(code, data, content_type="application/json", headers=()):
@@ -644,13 +814,14 @@ class RuntimeApp:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
             return self.slack_app(env, start)
-        if path not in {"/review", "/review/action", "/activity", "/settings"}:
+        if path not in {"/review", "/review/action", "/activity", "/settings", "/test-lab", "/test-lab/action"}:
             return respond("404 Not Found", "{}")
         if not _basic_authorized(env, self.cfg):
             return respond("401 Unauthorized", "Authentication required", "text/plain; charset=utf-8",
                            (("WWW-Authenticate", 'Basic realm="p-OPS review"'),))
-        if path in {"/review", "/activity", "/settings"} and method == "GET":
-            page = {"/review": "dashboard", "/activity": "activity", "/settings": "settings"}[path]
+        if path in {"/review", "/activity", "/settings", "/test-lab"} and method == "GET":
+            page = {"/review": "dashboard", "/activity": "activity", "/settings": "settings",
+                    "/test-lab": "test_lab"}[path]
             body = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
                     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                     "<meta name='theme-color' content='#5d29f0'><title>Partner ops · Runpod</title>"
@@ -662,10 +833,7 @@ class RuntimeApp:
                                                        "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"),))
         if path == "/review/action" and method == "POST":
             try:
-                size = int(env.get("CONTENT_LENGTH") or 0)
-                if size <= 0 or size > 16384: raise ValueError()
-                form = {key: values[0] for key, values in urllib.parse.parse_qs(
-                    env["wsgi.input"].read(size).decode(), keep_blank_values=True).items()}
+                form = self._form(env, 16384)
                 kind, action, item_id = form["kind"], form["action"], form["id"]
                 if not hmac.compare_digest(form.get("csrf", ""), _csrf(self.cfg, kind, action, item_id)):
                     return respond("403 Forbidden", "Invalid review token", "text/plain; charset=utf-8")
@@ -673,6 +841,14 @@ class RuntimeApp:
             except (ValueError, KeyError, UnicodeDecodeError, sqlite3.Error):
                 return respond("400 Bad Request", "Review action was not applied", "text/plain; charset=utf-8")
             return respond("303 See Other", b"", headers=(("Location", "/review"),))
+        if path == "/test-lab/action" and method == "POST":
+            try:
+                run_id = self.test_lab_action(self._form(env))
+            except PermissionError:
+                return respond("403 Forbidden", "Invalid test token", "text/plain; charset=utf-8")
+            except (ValueError, KeyError, UnicodeDecodeError, sqlite3.Error):
+                return respond("400 Bad Request", "Test action was not applied", "text/plain; charset=utf-8")
+            return respond("303 See Other", b"", headers=(("Location", "/test-lab#" + run_id),))
         return respond("405 Method Not Allowed", "{}")
 
 

@@ -128,6 +128,39 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(b"<h1>Settings</h1>", settings)
         self.assertIn(b"Change these in Railway", settings)
 
+    def test_test_lab_is_authenticated_and_validates_corpus_without_external_action(self):
+        self.assertEqual("401 Unauthorized", request(self.app, "/test-lab", auth=False)[0])
+        status, _, body = request(self.app, "/test-lab")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"<h1>Test Lab</h1>", body)
+        self.assertIn(b"25 cases", body)
+        self.assertIn(b"No external writes", body)
+        form = urllib.parse.urlencode({"action": "validate",
+            "csrf": _csrf(self.cfg, "test_lab", "validate", "new")}).encode()
+        status, headers, _ = request(self.app, "/test-lab/action", "POST", form)
+        self.assertEqual("303 See Other", status)
+        self.assertTrue(headers["Location"].startswith("/test-lab#"))
+        self.assertEqual("corpus", self.dashboard.test_lab.rows()[0]["kind"])
+
+    def test_test_lab_evaluates_text_and_saves_operator_feedback(self):
+        app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp(), triage_client=FakeTriage())
+        form = urllib.parse.urlencode({"action": "evaluate_text", "title": "Redis follow-up",
+            "context": "Prepare the next step from the partner call.",
+            "csrf": _csrf(self.cfg, "test_lab", "evaluate_text", "new")}).encode()
+        status, headers, _ = request(app, "/test-lab/action", "POST", form)
+        self.assertEqual("303 See Other", status)
+        row = self.dashboard.test_lab.rows()[0]
+        result = json.loads(row["result_json"])
+        self.assertEqual("create_task", result["decision"]["disposition"])
+        self.assertFalse(result["executable"])
+        feedback = urllib.parse.urlencode({"action": "feedback", "id": row["id"],
+            "feedback": "too_aggressive", "note": "Wait for the scheduled call.",
+            "csrf": _csrf(self.cfg, "test_lab", "feedback", row["id"])}).encode()
+        self.assertEqual("303 See Other", request(app, "/test-lab/action", "POST", feedback)[0])
+        saved = self.dashboard.test_lab.rows()[0]
+        self.assertEqual("too_aggressive", saved["feedback"])
+        self.assertEqual("Wait for the scheduled call.", saved["feedback_note"])
+
     def test_csrf_protected_review_action(self):
         message_id = self.stores[2].create("slack", "C1", "Ready to send")
         bad = urllib.parse.urlencode({"kind": "message", "action": "approve", "id": message_id,
