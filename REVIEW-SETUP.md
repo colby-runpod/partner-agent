@@ -22,16 +22,31 @@ motion, a named customer, quantified volume, spam or a blocker. It doesn't
 pick the label. `decide()` in `review.py` applies the intake rules to those
 facts, so the same facts always get the same score and decision:
 
-- **DQ:** spam. **1:** a legitimate sender at the wrong door. **2:** an
-  unverified person, company or fit, or supply below the bar.
+These mirror the scheduled pipeline's rules (sections 3 and 3b of the
+inbound-partner-requests skill), so the card and the Notion row should land on
+the same call:
+
+- **DQ:** spam. **1:** a legitimate sender at the wrong door, including
+  startup-credit and creator asks (self-serve) and customers who belong to
+  Sales. **2:** an unverified person, company or fit (no public footprint, an
+  open-source or side project), or supply below the bar.
 - **5:** all four checks verified. **4:** identity, company and fit verified.
   **3:** anything else.
-- 4 and 5 are **pursue**. A 3 is **pursue** only with a named customer, real
-  volume or a warm intro, **triage** with a specific motion or a notable
-  counterparty, and **do not pursue** otherwise.
-- A blocker (for example sanctions) or "already in play" turns pursue into
-  **triage**. Self-serve routes become **point to self-serve**. A blank or
-  unusable ask is always **triage**, never a DQ.
+- 4 and 5 are **pursue**. A 3 is kept as **triage** (probe) only with one
+  genuine signal: a specific motion from a verified company, a named customer,
+  a quantified figure, a warm intro or a notable counterparty. Otherwise it is
+  **do not pursue**. 2s and DQs are **do not pursue**.
+- 1s with a destination are **redirect**: a pointer reply for Startup Program
+  or Influencer/Creator, a MOPS ticket for Sales.
+- A warm intro or a notable counterparty is never DQ'd on judgment: it goes
+  to **triage** instead. A blocker (for example sanctions) or "already in
+  play" turns pursue into **triage**. A blank or unusable ask is always
+  **triage**.
+
+When the pipeline logs the same submission in Partner Biz Dev, the bot adds a
+line to the card within about 15 minutes: "Notion pipeline agrees: …" or
+"Notion pipeline differs: … (this card: …)", with a link to the row. Log in
+Notion and Draft in Gmail then act on that row.
 
 To change a rule, change one line in `decide()` and its test.
 

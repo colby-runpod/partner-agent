@@ -449,9 +449,12 @@ class DecideTests(unittest.TestCase):
 
     def test_score_three_paths(self):
         three = checks(i='partial')
-        self.assertEqual(review.decide(three, sig(named_customer=True), 'Partnerships')[1], 'pursue')
-        self.assertEqual(review.decide(three, sig(quantified_volume=True), 'Partnerships')[1], 'pursue')
+        # Pipeline 3b: a 3 is kept (probe) with one genuine signal, never pursued outright.
+        self.assertEqual(review.decide(three, sig(named_customer=True), 'Partnerships')[1], 'triage')
+        self.assertEqual(review.decide(three, sig(quantified_volume=True), 'Partnerships')[1], 'triage')
         self.assertEqual(review.decide(three, sig(specific_motion=True), 'Partnerships')[1], 'triage')
+        weak_company = checks(i='partial', c='partial')
+        self.assertEqual(review.decide(weak_company, sig(specific_motion=True), 'Partnerships'), ('3', 'do_not_pursue'))
         self.assertEqual(review.decide(three, sig(notable_counterparty=True), 'Partnerships')[1], 'triage')
         self.assertEqual(review.decide(three, sig(), 'Partnerships')[1], 'do_not_pursue')
 
@@ -459,9 +462,23 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(review.decide(checks(), sig(blocker='sanctions check'), 'Partnerships'), ('4', 'triage'))
         self.assertEqual(review.decide(checks(), sig(already_in_play=True), 'Partnerships'), ('4', 'triage'))
         self.assertEqual(review.decide(checks(i='unverified'), sig(ask_unusable=True), 'Partnerships'), ('2', 'triage'))
-        self.assertEqual(review.decide(checks(f='partial'), sig(), 'Startup Program'), ('3', 'redirect'))
+        self.assertEqual(review.decide(checks(f='partial'), sig(), 'Startup Program'), ('1', 'redirect'))
+        self.assertEqual(review.decide(checks(), sig(), 'Sales'), ('1', 'redirect'))
         self.assertEqual(review.decide(checks(), sig(wrong_door=True), 'Influencer/Creator'), ('1', 'redirect'))
-        self.assertEqual(review.decide(checks(i='unverified'), sig(), 'Influencer/Creator'), ('2', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(i='unverified'), sig(), 'Influencer/Creator'), ('1', 'redirect'))
+
+    def test_escalations_are_never_dqd_on_judgment(self):
+        self.assertEqual(review.decide(checks(c='unverified'), sig(warm_intro=True), 'Partnerships'), ('2', 'triage'))
+        self.assertEqual(review.decide(checks(), sig(wrong_door=True, notable_counterparty=True), 'Review Needed'),
+                         ('1', 'triage'))
+        self.assertEqual(review.decide(checks(), sig(spam=True, warm_intro=True), 'Partnerships'), ('DQ', 'do_not_pursue'))
+        self.assertEqual(review.decide(checks(), sig(spam=True, ask_unusable=True), 'Partnerships'), ('DQ', 'do_not_pursue'))
+
+    def test_sales_redirect_has_no_pointer_and_routes_to_sales(self):
+        r = review.parse(json.dumps(dict(GOOD, route='Sales', first_name='Demo', company_short='Example')))
+        self.assertEqual((r['score'], r['decision']), ('1', 'redirect'))
+        self.assertEqual(review.drafts(r, 'd@x.com', SUBMITTED), [])
+        self.assertIn('Route to Sales with a MOPS ticket', review.render(r))
 
     def test_same_facts_same_call(self):
         raw = json.dumps(dict(GOOD, signals={'specific_motion': True}))
@@ -1007,6 +1024,99 @@ class DraftSafetyTests(unittest.TestCase):
         self.assertIn('already has a Gmail draft', client.ephemerals[-1])
         self.assertEqual(client.updates[-1][2], [('park', 'T1:CSUB:50.1')])
         self.assertIn('Logged in Notion', client.updates[-1][3][0])
+
+
+
+class PipelineAgreementTests(unittest.TestCase):
+    """The card shows the scheduled pipeline's call once it has logged the submission."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store = Store(self.tmp.name + '/q.db'); self.ledger = review.Ledger(self.store.path)
+        self.client = FakeUI()
+        r = review.parse(json.dumps(PROBE_GOOD)); r['email'], r['submitted'] = 'demo@example.com', '2026-10-13'
+        r['drafts'] = review.drafts(r, 'demo@example.com', SUBMITTED); self.client.last = r
+        self.cfg = dict(ICFG, review_mode='thread')
+        self.store.enqueue(review.accept_review(BODY, self.cfg))
+        review.process(self.store, self.store.next_job(), self.client, self.ledger, self.cfg)
+
+    class Check:
+        def __init__(self, found=None, fail=False): self.found, self.fail, self.asked = found, fail, []
+        def find(self, email, submitted):
+            self.asked.append((email, submitted))
+            if self.fail: raise ValueError('Remote HTTP 404')
+            return self.found
+
+    def row(self, **over):
+        r = {'status': 'Actioned', 'score': '3', 'next_step': 'Draft email reply', 'route': 'Partnerships',
+             'url': 'https://www.notion.so/row1', 'id': 'row-1'}
+        r.update(over); return r
+
+    def test_agreement_note_and_buttons_point_at_pipeline_row(self):
+        check = self.Check(self.row())
+        review.reconcile(self.cfg, self.ledger, self.client, check, now=time.time())
+        self.assertEqual(check.asked, [('demo@example.com', '2026-10-13')])
+        channel, ts, buttons, notes = self.client.updates[-1]
+        self.assertEqual((channel, ts), ('CSUB', '50.5'))
+        self.assertTrue(notes[-1].startswith(':white_check_mark: Notion pipeline agrees: Needs triage · Score 3'))
+        self.assertNotIn('log_notion', [b[0] for b in buttons])
+        self.assertEqual(self.ledger.review('T1:CSUB:50.1')['notion_url'], 'https://www.notion.so/row1')
+        self.assertTrue(json.loads(self.ledger.get('nv:T1:CSUB:50.1'))['agree'])
+        review.reconcile(self.cfg, self.ledger, self.client, check, now=time.time() + 1000)
+        self.assertEqual(len(check.asked), 1)  # Once per card.
+
+    def test_disagreement_note(self):
+        review.reconcile(self.cfg, self.ledger, self.client, self.Check(self.row(status='DQ', score='2', next_step='No action')),
+                         now=time.time())
+        note = self.client.updates[-1][3][-1]
+        self.assertIn(':x: Notion pipeline differs: DQ · Score 2 · Partnerships · No action (this card: Needs triage · Score 3)', note)
+        self.assertFalse(json.loads(self.ledger.get('nv:T1:CSUB:50.1'))['agree'])
+
+    def test_waits_for_the_row_and_throttles(self):
+        check = self.Check(None)
+        t = time.time()
+        review.reconcile(self.cfg, self.ledger, self.client, check, now=t)
+        review.reconcile(self.cfg, self.ledger, self.client, check, now=t + 60)
+        self.assertEqual(len(check.asked), 1)  # 15-minute throttle
+        self.assertEqual(self.client.updates, [])
+        self.assertIsNone(self.ledger.get('nv:T1:CSUB:50.1'))
+
+    def test_failure_is_logged_not_fatal(self):
+        review.reconcile(self.cfg, self.ledger, self.client, self.Check(fail=True), now=time.time())
+        self.assertEqual(self.client.updates, [])
+
+    def test_pipeline_decision_mapping(self):
+        D = review.pipeline_decision
+        self.assertEqual(D(self.row(status='DQ', score='3')), 'do_not_pursue')
+        self.assertEqual(D(self.row(next_step='Point to resource', score='1')), 'redirect')
+        self.assertEqual(D(self.row(next_step='Route to sales', score='1', status='Flagged')), 'redirect')
+        self.assertEqual(D(self.row(score='4', next_step='Flag for review')), 'pursue')
+        self.assertEqual(D(self.row(score='3', next_step='Route to supply')), 'triage')
+
+    @patch.dict('os.environ', {'NOTION_TOKEN': 'secret_x'})
+    def test_find_skips_unprocessed_bot_rows(self):
+        def page(ref, notes, url):
+            return {'url': url, 'id': url[-1], 'properties': {
+                'Intake Ref': {'type': 'rich_text', 'rich_text': [{'plain_text': ref}]},
+                'Quality Notes': {'type': 'rich_text', 'rich_text': [{'plain_text': notes}]},
+                'Status': {'type': 'select', 'select': {'name': 'DQ'}},
+                'Qualification Score': {'type': 'select', 'select': {'name': '2'}}}}
+        with patch('review.api', return_value={'results': [page('tpa:C:1', 'bot notes', 'https://www.notion.so/a'),
+                                                            page('slack:9.9', 'x', 'https://www.notion.so/b')]}) as api:
+            found = review.PipelineCheck(dict(ICFG, notion_intake='INTAKE')).find('demo@example.com', '2026-10-13')
+        self.assertEqual(found['url'], 'https://www.notion.so/b')
+        flt = api.call_args.args[2]['filter']['and']
+        self.assertEqual(flt[1], {'property': 'Submitted', 'date': {'on_or_after': '2026-10-10'}})
+        with patch('review.api', return_value={'results': [page('tpa:C:1', 'Pipeline ref: slack:9.9', 'https://www.notion.so/a')]}):
+            self.assertEqual(review.PipelineCheck(dict(ICFG, notion_intake='INTAKE')).find('d@e.f', '2026-10-13')['url'],
+                             'https://www.notion.so/a')
+
+    def test_lookup_failure_is_logged(self):
+        class H:
+            def lookup(self, text): raise ValueError('Remote HTTP 404')
+        c = review.ReviewClients(ICFG, history=H())
+        with patch('builtins.print') as p:
+            self.assertEqual(c.lookup('x'), 'unavailable')
+        self.assertIn('Remote HTTP 404', p.call_args.args[0])
 
 
 if __name__ == '__main__':

@@ -51,13 +51,14 @@ DIGEST_MARKERS = ('PARTNERSHIP MQL DIGEST', 'Incoming Partnership Request')
 ROUTES = ('Partnerships', 'Supply Team', 'Sales', 'Events/Sponsorship', 'Influencer/Creator',
           'Research/University', 'Startup Program', 'Product/Eng', 'Review Needed')
 SELF_SERVE = ('Startup Program', 'Influencer/Creator')
+WRONG_DOOR_ROUTES = SELF_SERVE + ('Sales',)  # Score 1 with a real destination
 TYPES = ('Data Center / Infrastructure', 'Reseller/VAR', 'Technology/Integration', 'AI / Model',
          'Credits / Program', 'Co-marketing', 'VC/PE/Incubator', 'Misrouted / Other', 'Referral',
          'SI', 'Consultancy/Advisory', 'MSP', 'Community / Education')
 VERDICTS = ('verified', 'partial', 'unverified')
 DECISIONS = {'pursue': ':large_green_circle: Pursue',
              'triage': ':large_yellow_circle: Needs triage',
-             'redirect': ':arrow_right: Point to self-serve',
+             'redirect': ':arrow_right: Redirect',
              'do_not_pursue': ':red_circle: Do not pursue'}
 SIGNALS = ('spam', 'wrong_door', 'below_supply_bar', 'ask_unusable', 'specific_motion', 'named_customer',
            'quantified_volume', 'warm_intro', 'notable_counterparty', 'already_in_play')
@@ -93,9 +94,14 @@ of a company's own marketing are one source. An unreachable site is not evidence
 invent facts. HubSpot's own "Qualified because" lines are context, not verification.
 
 Four checks, each verified, partial or unverified:
-- identity: a real, findable person with authority, and the email domain matches the company.
+- identity: a real, findable person with authority, and the email domain matches the company. Verified
+  when the person is findable at the company (LinkedIn, team page, press) or a non-free-mail domain
+  matches the verified company and the person plausibly holds the role. A title that differs between
+  sources is not a downgrade on its own. Partial when only the domain matches; unverified when nothing
+  ties the person to the company or the domain is free mail with no other trace.
 - company: a verified operating business (registry, press, named customers, listings, or a live site
-  plus a LinkedIn page with named staff).
+  plus a LinkedIn page with named staff). An open-source project, a side project or a company with no
+  public footprint beyond its own site is unverified.
 - fit: the ask maps clearly to a category Runpod wants (see routes). Marginal or unclear fit is
   partial; a request Runpod does not do is unverified.
 - potential: scale and readiness now are evidenced (volume, spend, GPU counts, named customers,
@@ -103,9 +109,12 @@ Four checks, each verified, partial or unverified:
 
 Signals (true or false), reported honestly; the score and decision are computed from them, so do not
 state a score or decision anywhere:
-- spam: an advertisement, mass solicitation, SEO or link-placement pitch, or nonsense.
+- spam: mass solicitation, SEO or link-placement pitches, lead-gen or agency cold pitches, or nonsense.
+  Someone offering paid content, ads or a listing on their own channel or site is not spam: route
+  Influencer/Creator (the affiliate program is their destination).
 - wrong_door: a legitimate sender whose ask is not a partnership at all (support, investing in
-  Runpod, selling the company, job seeking).
+  Runpod, selling the company, job seeking). A customer wanting to buy, or asking a commercial or
+  compliance question, is not wrong_door: route it Sales.
 - below_supply_bar: a supply offer of consumer GPUs below about a rack, a broker with no site, or an
   operator borrowing a known name.
 - ask_unusable: the ask is blank or unusable in the digest, so it cannot be judged.
@@ -462,12 +471,13 @@ def _clean(value, limit):
 
 
 def decide(checks, signals, route):
-    """The 3b qualification rules, applied the same way every time."""
+    """The pipeline's 3 and 3b rules (inbound-partner-requests skill), applied the same way every time."""
     v = {name: checks[name][0] for name in checks}
+    escalate = signals['warm_intro'] or signals['notable_counterparty']  # 3b: never DQ these on judgment alone
     if signals['spam']:
         score = 'DQ'
-    elif signals['wrong_door']:
-        score = '1'
+    elif signals['wrong_door'] or route in WRONG_DOOR_ROUTES:
+        score = '1'  # A legitimate sender at the wrong door: self-serve programs, or a customer for Sales.
     elif signals['below_supply_bar'] or 'unverified' in (v['identity'], v['company'], v['fit']):
         score = '2'
     elif all(v[n] == 'verified' for n in ('identity', 'company', 'fit', 'potential')):
@@ -476,23 +486,24 @@ def decide(checks, signals, route):
         score = '4'
     else:
         score = '3'
-    if signals['ask_unusable'] and score not in ('DQ',):
+    if score == 'DQ':
+        return score, 'do_not_pursue'
+    if signals['ask_unusable']:
         return score, 'triage'  # Input integrity first: never DQ an ask nobody has seen.
-    if score in ('DQ', '2'):
-        return score, 'do_not_pursue'
-    if route in SELF_SERVE:
-        return score, 'redirect'
     if score == '1':
-        return score, 'do_not_pursue'
+        if route in WRONG_DOOR_ROUTES:
+            return score, 'redirect'
+        return score, 'triage' if escalate else 'do_not_pursue'
+    if score == '2':
+        return score, 'triage' if escalate else 'do_not_pursue'
     if signals['blocker'] or signals['already_in_play']:
         return score, 'triage'
     if score in ('4', '5'):
         return score, 'pursue'
-    if signals['named_customer'] or signals['quantified_volume'] or signals['warm_intro']:
-        return score, 'pursue'
-    if signals['specific_motion'] or signals['notable_counterparty']:
-        return score, 'triage'
-    return score, 'do_not_pursue'
+    # Score 3 is a coin flip: keep it only with one genuine signal, otherwise DQ.
+    keep = (signals['specific_motion'] and v['company'] == 'verified') or signals['named_customer'] or \
+        signals['quantified_volume'] or escalate
+    return score, 'triage' if keep else 'do_not_pursue'
 
 
 def parse(raw):
@@ -556,6 +567,8 @@ def drafts(review, email, submitted):
     fill = {'first': review['first_name'], 'company': review['company_short']}
     route, decision, v = review['route'], review['decision'], {n: c[0] for n, c in review['checks'].items()}
     if decision == 'redirect':
+        if route == 'Sales':
+            return []  # Sales picks it up from the MOPS ticket; nothing lead-facing from Partnerships.
         template = POINTER_STARTUP if route == 'Startup Program' else POINTER_CREATOR
         return [('Pointer reply', template.format(**fill))]
     if decision == 'do_not_pursue':
@@ -580,7 +593,8 @@ def render_history(history):
     if history is None:
         return []
     if history == 'unavailable':
-        return ['', '*History* Notion lookup failed, so prior submissions were not checked.']
+        return ['', '*History* Notion lookup failed, so prior submissions were not checked. If this keeps '
+                    'happening, share Partner Biz Dev with the Notion integration.']
     lines = ['', '*History*']
     for row in history['intake']:
         label = _clean('%s, %s' % (row['contact'] or 'unknown', row['company'] or 'unknown'), 90)
@@ -613,8 +627,9 @@ def render(review, history=None, draft_list=()):
     if review['decision'] == 'do_not_pursue':
         step = 'No action.'
     elif review['decision'] == 'redirect':
-        step = 'Point to the %s.' % ('startup program' if review['route'] == 'Startup Program'
-                                     else 'referral and affiliate program')
+        step = ('Route to Sales with a MOPS ticket; no partnership reply.' if review['route'] == 'Sales' else
+                'Point to the %s.' % ('startup program' if review['route'] == 'Startup Program'
+                                      else 'referral and affiliate program'))
     else:
         step = review['next_step']
     lines += ['', ':point_right: *Suggested next step:* ' + step]
@@ -787,7 +802,10 @@ class ReviewClients:
             return None
         try:
             return self.history.lookup(text)
-        except Exception:
+        except Exception as exc:
+            # Visible in Railway logs: "Remote HTTP 404" means the database isn't shared with the integration,
+            # 401 a bad token, 400 a filter that no longer matches the schema. No content is logged.
+            print('Notion history lookup failed: %s' % str(exc)[:80], flush=True)
             return 'unavailable'
 
     def review(self, event):
@@ -1025,6 +1043,96 @@ def gmail_draft(data):
     return ''
 
 
+SHORT = {'pursue': 'Pursue', 'triage': 'Needs triage', 'redirect': 'Redirect', 'do_not_pursue': 'DQ'}
+
+
+def pipeline_decision(row):
+    """The pipeline's call on a Partner Biz Dev row, in the bot's decision terms."""
+    if row['status'] == 'DQ':
+        return 'do_not_pursue'
+    if row['next_step'] == 'Point to resource' or (row['next_step'] == 'Route to sales' and row['score'] == '1'):
+        return 'redirect'
+    return 'pursue' if row['score'] in ('4', '5') else 'triage'
+
+
+class PipelineCheck:
+    """Finds the scheduled pipeline's row for a reviewed submission (read-only)."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def find(self, email, submitted):
+        since = (dt.date.fromisoformat(submitted) - dt.timedelta(days=3)).isoformat()
+        pages = api('https://api.notion.com/v1/data_sources/%s/query' % self.cfg['notion_intake'],
+                    os.environ['NOTION_TOKEN'], {'filter': {'and': [
+                        {'property': 'Email', 'email': {'equals': email}},
+                        {'property': 'Submitted', 'date': {'on_or_after': since}}]}, 'page_size': 5},
+                    NOTION_VERSION).get('results', [])
+        for page in pages:
+            ref, notes = _prop(page, 'Intake Ref'), _prop(page, 'Quality Notes')
+            if ref.startswith('tpa:') and 'Pipeline ref:' not in notes:
+                continue  # A row the bot logged that the pipeline hasn't processed yet carries the bot's own call.
+            return {'status': _prop(page, 'Status'), 'score': _prop(page, 'Qualification Score'),
+                    'next_step': _prop(page, 'Suggested Next Step'), 'route': _prop(page, 'Forward To'),
+                    'url': page.get('url', ''), 'id': page.get('id', '')}
+        return None
+
+
+def verdict_note(data, found):
+    pipe = pipeline_decision(found)
+    agree = pipe == data.get('decision')
+    call = '%s · Score %s · %s · %s' % (SHORT.get(pipe, pipe), found['score'] or '?', found['route'] or 'no route',
+                                       found['next_step'] or 'no next step')
+    link = ' · <%s|row>' % found['url'] if URL.fullmatch(found['url'] or '') else ''
+    if agree:
+        return ':white_check_mark: Notion pipeline agrees: %s%s' % (call, link), True
+    return (':x: Notion pipeline differs: %s (this card: %s · Score %s)%s'
+            % (call, SHORT.get(data.get('decision'), data.get('decision')), data.get('score'), link)), False
+
+
+def reconcile(cfg, ledger, clients, checker, now=None):
+    """Every 15 minutes: add the pipeline's call to cards whose submission it has now logged."""
+    now = now or time.time()
+    if now - float(ledger.get('reconcile_at') or 0) < 900:
+        return
+    ledger.put('reconcile_at', now)
+    for row in ledger.since(now - 4 * 86400):
+        key = row['key']
+        if row['outcome'] != 'ok' or not row.get('card_ts') or not row.get('card_text') or ledger.get('nv:' + key):
+            continue
+        data = json.loads(row.get('data') or '{}')
+        if not data.get('email') or not data.get('submitted'):
+            ledger.put('nv:' + key, 'no-email')
+            continue
+        try:
+            found = checker.find(data['email'], data['submitted'])
+        except Exception as exc:
+            print('Pipeline check failed: %s' % str(exc)[:80], flush=True)
+            return  # Try again next sweep; usually a sharing or token problem that affects every row.
+        if not found:
+            if now - row['created'] > 3 * 86400:
+                ledger.put('nv:' + key, 'missing')
+            continue
+        note, agree = verdict_note(data, found)
+        notes = json.loads(row.get('notes') or '[]') + [note]
+        fields = {'notes': json.dumps(notes)}
+        if not row.get('notion_url') and found['url']:
+            fields.update(notion_url=found['url'], notion_id=found['id'])  # Buttons now act on the pipeline's row.
+        ledger.mark(key, **fields)
+        done = {'log_notion'} if fields.get('notion_url') or row.get('notion_url') else set()
+        if any('Gmail draft requested' in n for n in notes):
+            done.add('draft_gmail')
+        buttons = [] if row.get('parked_by') else action_buttons(cfg, dict(data, key_for_buttons=key), done)
+        # Thread mode (and manual reviews) put the card in the digest's channel; shadow mode in the shadow channel.
+        channel = row['channel'] if cfg.get('review_mode') == 'thread' else cfg.get('shadow_channel')
+        try:
+            clients.update_card(channel, row['card_ts'], row['card_text'], buttons, notes)
+        except Exception:
+            print('Card update failed after pipeline check.', flush=True)
+        ledger.put('nv:' + key, json.dumps({'agree': agree, 'bot': data.get('decision'), 'bot_score': data.get('score'),
+                                            'notion': pipeline_decision(found), 'notion_score': found['score']}))
+
+
 def action_buttons(cfg, data, done=()):
     """[(action_id, review key)] for a card. Notion buttons need NOTION_WRITE."""
     if not cfg.get('interactive') or not data.get('key_for_buttons'):
@@ -1088,7 +1196,8 @@ class NotionWriter:
         notes.append('**SCORE:** %s. Decision: %s.' % (score, LABELS.get(decision, decision)))
         if data.get('blocker'):
             notes.append('**CLEAR FIRST:** ' + html.unescape(data['blocker']))
-        step = {'do_not_pursue': 'No action', 'redirect': 'Point to resource'}.get(decision) or (
+        step = {'do_not_pursue': 'No action', 'redirect': 'Route to sales' if data.get('route') == 'Sales'
+                else 'Point to resource'}.get(decision) or (
             'Route to supply' if data.get('route') == 'Supply Team' else
             'Route to sales' if data.get('route') == 'Sales' else
             'Draft email reply' if gmail_draft(data) else 'Flag for review')
@@ -1349,6 +1458,7 @@ def worker():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
+        pipeline_check = PipelineCheck(cfg)
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
         agent_writer = task_writer if cfg.get('tasks_enabled') else None
         while True:
@@ -1356,6 +1466,8 @@ def worker():
             if not job:
                 if cfg['review_enabled']:
                     run_summary(cfg, ledger, review_clients)
+                    if cfg.get('notion_lookup'):
+                        reconcile(cfg, ledger, review_clients, pipeline_check)
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients, ledger, cfg)
