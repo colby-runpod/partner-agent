@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+import urllib.parse
 import uuid
 
 from p_ops_eval import load_cases, summary
@@ -24,11 +25,16 @@ FEEDBACK = {"approved", "too_aggressive", "too_cautious", "missing_context", "wr
 
 def notion_page_id(value):
     """Extract a canonical Notion page UUID from a page URL or UUID."""
-    matches = re.findall(r"(?i)(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", value or "")
+    raw = value or ""
+    pattern = r"(?i)(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])"
+    path_matches = re.findall(pattern, urllib.parse.urlparse(raw).path)
+    if path_matches:
+        return str(uuid.UUID(path_matches[-1]))
+    matches = re.findall(pattern, raw)
     if matches:
-        return str(uuid.UUID(matches[-1]))
+        return str(uuid.UUID(matches[0]))
     try:
-        return str(uuid.UUID((value or "").strip()))
+        return str(uuid.UUID(raw.strip()))
     except (ValueError, AttributeError):
         raise ValueError("Enter a valid Notion task URL or page ID.") from None
 
