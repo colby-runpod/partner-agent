@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import unittest
+import urllib.error
 
 from p_ops_eval import bundle_from_case, load_cases, score_case, summary
 from p_ops_triage import ClaudeTriageClient, TriageDecision, guard_decision
@@ -34,6 +35,14 @@ class Response:
     def __enter__(self): return self
     def __exit__(self, *args): return None
     def read(self): return json.dumps(self.payload).encode()
+    def close(self): return None
+
+
+def http_error(code, message):
+    return urllib.error.HTTPError(
+        "https://api.anthropic.com/v1/messages", code, "error", {},
+        Response({"error": {"message": message}}),
+    )
 
 
 class TriageTests(unittest.TestCase):
@@ -41,6 +50,10 @@ class TriageTests(unittest.TestCase):
         raw = decision()
         raw.pop("rationale")
         with self.assertRaises(ValueError): TriageDecision.from_dict(raw)
+
+    def test_confidence_range_is_enforced_by_application_validation(self):
+        with self.assertRaisesRegex(ValueError, "between zero and one"):
+            TriageDecision.from_dict(decision(confidence=1.1))
         raw = decision(extra="bad")
         with self.assertRaises(ValueError): TriageDecision.from_dict(raw)
 
@@ -67,11 +80,46 @@ class TriageTests(unittest.TestCase):
         guarded = guard_decision(decision(disposition="merge_task", canonical_task_id="unknown"), BUNDLE)
         self.assertIn("canonical_task_not_in_evidence", guarded.violations)
 
+    def test_guard_normalizes_work_mode_and_confidence_from_evidence(self):
+        guarded = guard_decision(decision(
+            disposition="merge_task", canonical_task_id="existing",
+            work_mode="Decide", confidence=0.12, requires_message=True,
+            missing_evidence=["sent thread"], review_reasons=["verify contact"],
+        ), dict(BUNDLE, existing_tasks=[{"id": "existing"}]))
+        self.assertEqual("Execute", guarded.decision.work_mode)
+        self.assertEqual(0.70, guarded.decision.confidence)
+
+    def test_guard_maps_non_execution_dispositions_to_stable_work_modes(self):
+        cases = {
+            "monitor": "Monitor", "await_external_input": "Waiting",
+            "reference_only": "Reference", "route_department": "Delegate",
+            "attach_to_meeting": "Meeting-bound", "decline_or_drop": "Decide",
+        }
+        for disposition, expected in cases.items():
+            raw = decision(disposition=disposition)
+            bundle = BUNDLE
+            if disposition == "attach_to_meeting":
+                raw.update(meeting_id="meet-1", preparation_required=True)
+                bundle = dict(BUNDLE, meetings=[{"id": "meet-1"}])
+            self.assertEqual(expected, guard_decision(raw, bundle).decision.work_mode)
+
     def test_claude_client_parses_schema_valid_output(self):
         payload = {"stop_reason": "end_turn", "content": [
             {"type": "text", "text": json.dumps(decision())}]}
-        client = ClaudeTriageClient("key", "model", opener=lambda request, timeout: Response(payload))
+        captured = {}
+        def open_response(request, timeout):
+            captured.update(json.loads(request.data))
+            return Response(payload)
+        client = ClaudeTriageClient("key", "model", opener=open_response)
         self.assertEqual("create_task", client.analyze(BUNDLE).disposition)
+        self.assertEqual(0, captured["temperature"])
+
+    def test_claude_client_surfaces_safe_api_error_detail(self):
+        def fail(request, timeout):
+            raise http_error(400, "model: invalid model name")
+        client = ClaudeTriageClient("key", "model", opener=fail)
+        with self.assertRaisesRegex(ValueError, "invalid model name"):
+            client.analyze(BUNDLE)
 
     def test_eval_corpus_has_25_valid_cases_and_history(self):
         path = Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl"

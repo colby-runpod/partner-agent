@@ -15,12 +15,56 @@ import urllib.parse
 import uuid
 
 from p_ops_eval import load_cases, summary
-from p_ops_notion import FIELDS, _property
+from p_ops_notion import FIELDS, RemoteError, _property
 from p_ops_shadow import _candidate, _shortlist
 from p_ops_triage import guard_decision
 
 
 FEEDBACK = {"approved", "too_aggressive", "too_cautious", "missing_context", "wrong_disposition"}
+
+
+def active_task_queue(pages, evaluated_source_ids=None, current_date=None):
+    """Build a compact, deterministic review queue from active Notion pages."""
+    evaluated_source_ids = set(evaluated_source_ids or ())
+    today = current_date or dt.date.today()
+    status_rank = {
+        "In Progress": 0, "Next": 1, "Inbox": 2, "Finalizing": 3,
+        "Waiting on Other": 4, "Snoozed": 5,
+    }
+
+    def queue_date(page, field):
+        value = str(_property(page, FIELDS[field]) or "")[:10]
+        return value if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", value) else ""
+
+    items = []
+    for page in pages or ():
+        task = _candidate(page)
+        item_id = page.get("id", "")
+        due_date = queue_date(page, "due_date")
+        next_step_date = queue_date(page, "next_step_date")
+        checkpoint = min(filter(None, (due_date, next_step_date)), default="")
+        overdue = bool(checkpoint and checkpoint < today.isoformat())
+        items.append({
+            "id": item_id,
+            "url": page.get("url") or ("https://www.notion.so/" + item_id.replace("-", "")),
+            "title": task.get("title") or "Untitled Working Task",
+            "status": task.get("status") or "Unknown",
+            "owner": str(_property(page, FIELDS["owner"]) or ""),
+            "work_mode": str(_property(page, FIELDS["work_mode"]) or ""),
+            "due_date": due_date,
+            "next_step_date": next_step_date,
+            "next_step": task.get("next_step") or "",
+            "overdue": overdue,
+            "evaluated": item_id in evaluated_source_ids,
+        })
+    items.sort(key=lambda item: (
+        item["evaluated"],
+        0 if item["overdue"] else 1,
+        status_rank.get(item["status"], 9),
+        min(filter(None, (item["due_date"], item["next_step_date"])), default="9999-12-31"),
+        item["title"].lower(),
+    ))
+    return items
 
 
 def notion_page_id(value):
@@ -63,7 +107,16 @@ def bundle_from_text(title, context, current_date=None):
 
 def bundle_from_notion_url(value, notion_client, current_date=None):
     page_id = notion_page_id(value)
-    page = notion_client.page(page_id)
+    try:
+        page = notion_client.page(page_id)
+    except RemoteError as exc:
+        if str(exc) == "Notion HTTP 404":
+            raise ValueError(
+                "The p-OPS Notion integration cannot access this task. "
+                "Connect the Working Tasks database to the Notion integration whose token is "
+                "stored in Railway as NOTION_TOKEN, then try again."
+            ) from None
+        raise
     task = _candidate(page)
     title = task.get("title") or "Untitled Working Task"
     source_text = "\n".join(filter(None, (
@@ -75,7 +128,17 @@ def bundle_from_notion_url(value, notion_client, current_date=None):
         "Owner: " + str(_property(page, FIELDS["owner"]) or "Not provided"),
         "Work mode: " + str(_property(page, FIELDS["work_mode"]) or "Not provided"),
     )))
-    active = [candidate for candidate in notion_client.active_pages() if candidate.get("id") != page.get("id")]
+    try:
+        active = [candidate for candidate in notion_client.active_pages()
+                  if candidate.get("id") != page.get("id")]
+    except RemoteError as exc:
+        if str(exc) == "Notion HTTP 404":
+            raise ValueError(
+                "The p-OPS Notion integration can read this task but cannot access the Working Tasks database. "
+                "Connect that database to the Notion integration whose token is stored in Railway as "
+                "NOTION_TOKEN, then try again."
+            ) from None
+        raise
     related = _shortlist(active, source_text)
     objective_ids = task.get("objective_ids") or []
     workstream_ids = task.get("workstream_ids") or []
@@ -129,6 +192,27 @@ class TestLabLedger:
                  state, time.time(), error))
         return run_id
 
+    def start(self, kind, label, input_data):
+        run_id = uuid.uuid4().hex[:24]
+        with self.connect() as db:
+            db.execute("""INSERT INTO p_ops_test_lab
+                (id,kind,label,input_json,result_json,state,created,error)
+                VALUES (?,?,?,?,?,?,?,?)""",
+                (run_id, kind, label[:240], json.dumps(input_data, sort_keys=True),
+                 None, "evaluating", time.time(), None))
+        return run_id
+
+    def finish(self, run_id, result=None, error=None):
+        state = "completed" if result is not None else "error"
+        with self.connect() as db:
+            changed = db.execute("""UPDATE p_ops_test_lab
+                SET result_json=?, state=?, error=? WHERE id=? AND state='evaluating'""",
+                (json.dumps(result, sort_keys=True) if result is not None else None,
+                 state, error, run_id)).rowcount
+        if not changed:
+            raise KeyError(run_id)
+        return run_id
+
     def feedback(self, run_id, value, note=""):
         if value not in FEEDBACK:
             raise ValueError("Unsupported test feedback.")
@@ -141,10 +225,25 @@ class TestLabLedger:
         if not changed:
             raise KeyError(run_id)
 
-    def rows(self, limit=25):
+    def rows(self, limit=100):
         with self.connect() as db:
             rows = db.execute("SELECT * FROM p_ops_test_lab ORDER BY created DESC LIMIT ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
+
+    def evaluated_source_ids(self):
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT input_json FROM p_ops_test_lab WHERE kind='notion' AND state='completed'"
+            ).fetchall()
+        source_ids = set()
+        for row in rows:
+            try:
+                source_id = json.loads(row["input_json"]).get("source", {}).get("id")
+            except (TypeError, ValueError):
+                source_id = None
+            if source_id:
+                source_ids.add(source_id)
+        return source_ids
 
 
 def validate_corpus(path):

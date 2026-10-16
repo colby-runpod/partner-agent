@@ -4,7 +4,7 @@ The model recommends a disposition. This module validates the response and
 applies non-model policy checks. During the pilot every result remains shadow
 mode and cannot execute an external action.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import datetime as dt
 import json
 import os
@@ -29,6 +29,19 @@ PROPOSED_ACTIONS = {
 }
 RISK_REVIEW = {"financial", "credit", "pricing", "commercial", "legal", "access", "sensitive_data",
                "personnel", "public", "strategic_commitment", "roadmap", "destructive"}
+
+DISPOSITION_WORK_MODES = {
+    "create_task": "Execute",
+    "merge_task": "Execute",
+    "create_child_action": "Execute",
+    "attach_to_meeting": "Meeting-bound",
+    "route_department": "Delegate",
+    "create_or_link_linear": "Execute",
+    "monitor": "Monitor",
+    "await_external_input": "Waiting",
+    "reference_only": "Reference",
+    "decline_or_drop": "Decide",
+}
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,22 @@ def _ids(rows):
     return {str(row.get("id")) for row in rows or [] if row.get("id")}
 
 
+def _calibrated_confidence(decision, violations):
+    """Return an evidence-based score instead of preserving model self-confidence."""
+    score = 0.95
+    if decision.missing_evidence:
+        score -= 0.15
+    if decision.assumptions:
+        score -= 0.05
+    if decision.requires_message:
+        score -= 0.05
+    if decision.review_reasons:
+        score -= 0.05
+    if violations:
+        score -= 0.15
+    return round(max(0.05, min(0.95, score)), 2)
+
+
 def guard_decision(decision, bundle, pilot=True):
     """Apply evidence and approval rules after schema-valid model output."""
     if not isinstance(decision, TriageDecision):
@@ -175,6 +204,12 @@ def guard_decision(decision, bundle, pilot=True):
         violations.append("due_date_not_explicitly_supported")
     if decision.disposition == "create_task" and decision.meeting_id and not decision.preparation_required:
         violations.append("redundant_task_for_scheduled_meeting")
+
+    decision = replace(
+        decision,
+        work_mode=DISPOSITION_WORK_MODES[decision.disposition],
+        confidence=_calibrated_confidence(decision, violations),
+    )
 
     if decision.requires_message:
         reasons.add("message_requires_review")
@@ -233,7 +268,7 @@ TRIAGE_SCHEMA = {
         "assumptions": {"type": "array", "items": {"type": "string"}},
         "missing_evidence": {"type": "array", "items": {"type": "string"}},
         "review_reasons": {"type": "array", "items": {"type": "string"}},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence": {"type": "number"},
         "rationale": {"type": "string"},
     },
     "required": list(TriageDecision.__dataclass_fields__),
@@ -262,7 +297,8 @@ class ClaudeTriageClient:
             raise ValueError("Set ANTHROPIC_API_KEY and ANTHROPIC_MODEL before model triage.")
 
     def analyze(self, bundle):
-        payload = {"model": self.model, "max_tokens": 5000, "system": TRIAGE_INSTRUCTIONS,
+        payload = {"model": self.model, "max_tokens": 5000, "temperature": 0,
+                   "system": TRIAGE_INSTRUCTIONS,
                    "messages": [{"role": "user", "content": json.dumps(bundle, sort_keys=True)}],
                    "output_config": {"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}}}
         request = urllib.request.Request("https://api.anthropic.com/v1/messages", method="POST",
@@ -273,7 +309,16 @@ class ClaudeTriageClient:
             with self.opener(request, timeout=90) as response:
                 result = json.load(response)
         except urllib.error.HTTPError as exc:
-            raise ValueError("Claude triage HTTP %d" % exc.code) from None
+            detail = ""
+            try:
+                error = json.loads(exc.read().decode())
+                detail = str((error.get("error") or {}).get("message") or "").strip()
+            except (AttributeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                pass
+            message = "Claude triage HTTP %d" % exc.code
+            if detail:
+                message += ": " + detail[:500]
+            raise ValueError(message) from None
         except (OSError, ValueError, TimeoutError):
             raise ValueError("Claude triage response unavailable") from None
         if result.get("stop_reason") != "end_turn":

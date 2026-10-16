@@ -23,6 +23,7 @@ The Partner Ops expansion is a deliberately isolated, disabled-by-default founda
 - [`p_ops_runtime.py`](p_ops_runtime.py) connects the queues through one locked worker and a protected `/review` dashboard. It can schedule one daily Notion preview per America/Denver day without treating routine checks as meaningful task activity.
 - [`p_ops_triage.py`](p_ops_triage.py) defines the strict structured decision contract and applies deterministic evidence, date, routing, risk, and approval checks after model analysis. Pilot results are always non-executable shadow decisions.
 - [`p_ops_shadow.py`](p_ops_shadow.py) connects captured Inbox proposals to read-only triage. It shortlists active Working Tasks, records the evidence bundle and guarded decision in the local audit database, exposes no approval action, and cannot change an external system.
+- [`p_ops_workflow.py`](p_ops_workflow.py) turns a review-required shadow decision into a persisted Slack thread with one approval question at a time. Only allowlisted reviewers in the configured channel may answer. Links to the source, related task, and p-OPS are included, and the recorded answers do not bypass any execution gate.
 - [`p_ops_eval.py`](p_ops_eval.py) validates and optionally runs the 25-case triage corpus in [`evals/p_ops_triage_cases.jsonl`](evals/p_ops_triage_cases.jsonl). Each historical case records its reconciliation status and supporting source references; [`evals/HISTORICAL_EVIDENCE.md`](evals/HISTORICAL_EVIDENCE.md) summarizes the audit and remaining access gaps.
 - [`P_OPS_DEPLOYMENT.md`](P_OPS_DEPLOYMENT.md) contains the isolated pilot deployment and validation order. The existing Slack chat service is not changed.
 
@@ -33,6 +34,7 @@ python3 -m unittest test_p_ops.py -v
 python3 -m unittest test_p_ops_notion.py -v
 python3 -m unittest test_p_ops_capture.py test_p_ops_approval.py test_p_ops_linear.py -v
 python3 -m unittest test_p_ops_inbox.py test_p_ops_runtime.py -v
+python3 -m unittest test_p_ops_workflow.py test_p_ops_notifications.py -v
 python3 -m unittest test_p_ops_triage.py -v
 python3 p_ops_eval.py
 ```
@@ -65,6 +67,8 @@ All new capabilities are off unless their individual gate is exactly `true`:
 - `P_OPS_NOTION_CREATE` permits an approved, duplicate-checked Inbox proposal to become a Working Task.
 - `P_OPS_LINEAR_WRITE` permits an approved Linear draft to be created after a duplicate search.
 - `P_OPS_SEND_MESSAGES` permits a separately approved and send-authorized Slack or email draft to be delivered through an injected sender.
+- `P_OPS_REVIEW_POSTING_ENABLED` permits review cards in the single configured internal Slack channel.
+- `P_OPS_REVIEW_INTERACTIVE_ENABLED` permits allowlisted reviewers to answer the review card's sequential questions. It records decisions only; it does not execute the approved work.
 
 These gates do not replace review. Keep them unset until the corresponding receiver/worker is deployed with persistent storage, scoped credentials, and an operator review surface.
 
@@ -114,7 +118,7 @@ Use Python 3.10+ in a virtual environment, install `requirements-ai.txt`, and co
 - Create or reuse a Partner Agent Slack application and confirm its destination channel.
 - Implement explicit preview approval, delivery records, duplicate prevention, and failure recovery before scheduled sends.
 - Choose approved hosting, persistent storage, and a weekday schedule in America/Denver.
-- Add Slack questions and thread replies, then HubSpot and approval workflows.
+- Validate the sequential Slack approval flow with one non-sensitive shadow task before enabling any execution gate.
 
 The planned runtime is a small hosted Python application. Reusing Dan's existing hosting and bot framework remains an option; the current repository does not assume Railway is approved or that existing bots use it.
 

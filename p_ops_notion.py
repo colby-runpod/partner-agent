@@ -134,7 +134,7 @@ def encode_patch(patch):
     encoded = {}
     for name, value in patch.items():
         if name in {"Status"}:
-            encoded[name] = {"status": {"name": value}}
+            encoded[name] = {"select": {"name": value}}
         elif name in {"Close Reason"}:
             encoded[name] = {"select": {"name": value}}
         elif name in {"Review Required"}:
@@ -189,7 +189,7 @@ class NotionClient:
         pages, cursor = [], None
         while True:
             body = {"page_size": 100, "filter": {"or": [
-                {"property": "Status", "status": {"equals": status}} for status in ACTIVE]}}
+                {"property": "Status", "select": {"equals": status}} for status in ACTIVE]}}
             if cursor:
                 body["start_cursor"] = cursor
             result = self.request("POST", "https://api.notion.com/v1/data_sources/%s/query" % self.data_source_id, body)
@@ -217,7 +217,7 @@ class NotionClient:
         """Create only the bounded Inbox shape used by approved Slack captures."""
         properties = {
             "Item": {"title": _rich(fields["title"])},
-            "Status": {"status": {"name": "Inbox"}},
+            "Status": {"select": {"name": "Inbox"}},
             "Context": {"rich_text": _rich(fields["context"])},
             "Next Step": {"rich_text": _rich(fields["next_step"])},
             "Review Required": {"checkbox": True},

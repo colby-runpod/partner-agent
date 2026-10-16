@@ -16,7 +16,7 @@ def _clean(value, limit):
     return value[:limit]
 
 
-def review_card(shadow_row):
+def review_card(shadow_row, console_url=""):
     guarded = json.loads(shadow_row["decision_json"])
     decision = guarded["decision"]
     reasons = guarded.get("policy_reasons") or []
@@ -27,12 +27,18 @@ def review_card(shadow_row):
         "Recommendation: " + _clean(decision.get("disposition"), 80).replace("_", " ") +
         " - " + _clean(decision.get("next_step"), 500),
         "Already completed: Evidence was reviewed and the disposition was evaluated. No gated action was taken.",
-        "Decision: react with ✅ to approve, ❌ to reject or close, 🕒 to defer, or reply `change: <one sentence>`.",
+        "Decision: open the thread and answer the short approval questions. Each answer is recorded before the next question appears.",
     ]
     if reasons:
         lines.insert(3, "Review reason: " + _clean(", ".join(reasons), 500))
     if source.get("url"):
         lines.append("Source: " + _clean(source["url"], 1000))
+    bundle = json.loads(shadow_row["bundle_json"])
+    task_urls = [row.get("url") for row in bundle.get("existing_tasks") or [] if row.get("url")]
+    if task_urls:
+        lines.append("Task: " + _clean(task_urls[0], 1000))
+    if console_url:
+        lines.append("p-OPS review: " + _clean(console_url.rstrip("/") + "/review#approvals", 1000))
     return "\n".join(lines)
 
 
@@ -52,10 +58,10 @@ class ReviewNotificationLedger:
         db.row_factory = sqlite3.Row
         return db
 
-    def queue(self, shadow_row, channel):
+    def queue(self, shadow_row, channel, console_url=""):
         if not channel.strip():
             raise ValueError("The review notification channel is required.")
-        content = review_card(shadow_row)
+        content = review_card(shadow_row, console_url)
         digest = hashlib.sha256(content.encode()).hexdigest()
         now = time.time()
         with self.connect() as db:
@@ -73,6 +79,13 @@ class ReviewNotificationLedger:
             else:
                 rows = db.execute("SELECT * FROM p_ops_review_notifications ORDER BY created").fetchall()
         return [dict(row) for row in rows]
+
+    def get(self, triage_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM p_ops_review_notifications WHERE triage_id=?", (triage_id,)).fetchone()
+        if not row:
+            raise KeyError(triage_id)
+        return dict(row)
 
     def publish(self, triage_id, expected_channel, sender):
         with self.connect() as db:

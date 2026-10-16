@@ -31,9 +31,15 @@ class NotificationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_queue_is_deduplicated_and_restricted_to_expected_channel(self):
-        self.ledger.queue(shadow_row(), "C-APPROVED")
-        self.ledger.queue(shadow_row(), "C-APPROVED")
+        row = shadow_row()
+        row["bundle_json"] = json.dumps({"source": {"url": "https://slack.example/source"},
+                                         "existing_tasks": [{"url": "https://notion.example/task"}]})
+        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example")
+        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example")
         self.assertEqual(1, len(self.ledger.rows()))
+        content = self.ledger.get("triage-1")["content"]
+        self.assertIn("https://notion.example/task", content)
+        self.assertIn("https://p-ops.example/review#approvals", content)
         calls = []
         result = self.ledger.publish("triage-1", "C-DIFFERENT", lambda row: calls.append(row))
         self.assertEqual("review", result)

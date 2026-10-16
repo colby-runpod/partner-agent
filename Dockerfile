@@ -2,7 +2,7 @@ FROM python:3.11-slim
 WORKDIR /app
 COPY requirements-service.txt .
 RUN pip install --no-cache-dir -r requirements-service.txt
-COPY intake.py intake-routing.json assistant.py chat.py review.py tasks.py service.py p_ops.py p_ops_notion.py p_ops_notion.json p_ops_capture.py p_ops_approval.py p_ops_linear.py p_ops_inbox.py p_ops_triage.py p_ops_shadow.py p_ops_notifications.py p_ops_eval.py p_ops_test_lab.py p_ops_runtime.py p_ops_service.py P_OPS_PROMPT.md ./
+COPY intake.py intake-routing.json assistant.py chat.py review.py tasks.py service.py p_ops.py p_ops_notion.py p_ops_notion.json p_ops_capture.py p_ops_approval.py p_ops_linear.py p_ops_inbox.py p_ops_triage.py p_ops_shadow.py p_ops_notifications.py p_ops_eval.py p_ops_test_lab.py p_ops_workflow.py p_ops_runtime.py p_ops_service.py P_OPS_PROMPT.md ./
 COPY evals ./evals
 COPY assets ./assets
 ENV INTAKE_DB=/data/intake.sqlite3

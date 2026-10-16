@@ -2,11 +2,12 @@ import base64
 import datetime as dt
 import io
 import json
+from pathlib import Path
 import tempfile
 import unittest
 import urllib.parse
 
-from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, run_once
+from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, config, run_once
 from p_ops_triage import TriageDecision
 
 
@@ -40,10 +41,10 @@ class FakeCaptureClient:
 
 
 class FakeNotion:
-    def __init__(self): self.reads = 0
+    def __init__(self, pages=None): self.reads, self.pages = 0, pages or []
     def active_pages(self):
         self.reads += 1
-        return []
+        return self.pages
 
 
 class FakeTriage:
@@ -76,6 +77,14 @@ class FakeReviewSender:
         return "171.001"
 
 
+class FakeApprovalClient:
+    def __init__(self): self.steps = []
+    def post_step(self, flow, step):
+        self.steps.append((flow, step))
+        return "172.001"
+    def post_outcome(self, flow, outcome): pass
+
+
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,6 +95,10 @@ class RuntimeTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_deployment_image_includes_runtime_workflow_module(self):
+        dockerfile = Path(__file__).with_name("Dockerfile").read_text()
+        self.assertIn("p_ops_workflow.py", dockerfile)
 
     def test_dashboard_requires_auth_and_escapes_source(self):
         status, headers, _ = request(self.app, "/review", auth=False)
@@ -107,6 +120,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(b"Task updates", body)
         self.assertIn(b"Search or jump to", body)
         self.assertIn(b"Notifications", body)
+        self.assertIn(b"Approvals", body)
         self.assertIn("img-src 'self'", headers["Content-Security-Policy"])
         self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
         status, headers, asset = request(self.app, "/assets/runpod-logo-purple.png", auth=False)
@@ -142,6 +156,30 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(headers["Location"].startswith("/test-lab#"))
         self.assertEqual("corpus", self.dashboard.test_lab.rows()[0]["kind"])
 
+    def test_test_lab_lists_active_tasks_as_one_click_review_queue(self):
+        page = {"id": "task-1", "url": "https://notion.so/task-1", "properties": {
+            "Item": {"type": "title", "title": [{"plain_text": "Review Suger implementation"}]},
+            "Status": {"type": "status", "status": {"name": "In Progress"}},
+            "Next Step": {"type": "rich_text", "rich_text": [{"plain_text": "Confirm onboarding owners"}]},
+            "Accountable Owner": {"type": "people", "people": [{"name": "Colby"}]},
+            "Work Mode": {"type": "select", "select": {"name": "Execute"}},
+            "Due Date": {"type": "date", "date": {"start": "2026-10-17"}},
+        }}
+        notion = FakeNotion([page])
+        app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp(), notion_client=notion)
+        status, _, body = request(app, "/test-lab")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"Active task review queue", body)
+        self.assertIn(b"Review Suger implementation", body)
+        self.assertIn(b"Confirm onboarding owners", body)
+        self.assertIn(b"Search tasks, owners, next steps", body)
+        self.assertIn(b">Evaluate</button>", body)
+        self.assertIn(b"task-evaluation-form", body)
+        self.assertIn(b"View full task context", body)
+        self.assertIn(b"Persistent history", body)
+        self.assertIn(b"data-run-filter='evaluating'", body)
+        self.assertEqual(1, notion.reads)
+
     def test_test_lab_evaluates_text_and_saves_operator_feedback(self):
         app = RuntimeApp(self.cfg, self.dashboard, FakeSlackApp(), triage_client=FakeTriage())
         form = urllib.parse.urlencode({"action": "evaluate_text", "title": "Redis follow-up",
@@ -160,6 +198,11 @@ class RuntimeTests(unittest.TestCase):
         saved = self.dashboard.test_lab.rows()[0]
         self.assertEqual("too_aggressive", saved["feedback"])
         self.assertEqual("Wait for the scheduled call.", saved["feedback_note"])
+        status, _, body = request(app, "/test-lab")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"data-run-stage='needs-correction'", body)
+        self.assertIn(b"Open evaluation", body)
+        self.assertIn(b"Prepare the next step from the partner call.", body)
 
     def test_csrf_protected_review_action(self):
         message_id = self.stores[2].create("slack", "C1", "Ready to send")
@@ -188,6 +231,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(data["p_ops_enabled"])
         self.assertFalse(data["triage_shadow_enabled"])
         self.assertNotIn("password", data)
+
+    def test_interactive_review_requires_all_safety_prerequisites(self):
+        env = {"P_OPS_ENABLED": "true", "P_OPS_REVIEW_USER": "colby",
+               "P_OPS_REVIEW_PASSWORD": "password", "P_OPS_CSRF_SECRET": "csrf",
+               "P_OPS_REVIEW_INTERACTIVE_ENABLED": "true",
+               "SLACK_SIGNING_SECRET": "secret", "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}
+        with self.assertRaisesRegex(ValueError, "REVIEW_POSTING"):
+            config(env)
 
     def test_daily_preview_runs_once_per_mountain_day(self):
         cfg = dict(self.cfg, daily_review=True)
@@ -232,6 +283,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(1, len(sender.rows))
         self.assertEqual("C-REVIEW", sender.rows[0]["channel"])
         self.assertIn("Review needed:", sender.rows[0]["content"])
+
+    def test_interactive_review_posts_only_the_first_question(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=True,
+                   review_interactive=True, review_user_ids={"U1"},
+                   public_url="https://p-ops.example")
+        event = {"event_id": "Ev3", "team_id": "T1", "channel": "C1", "ts": "789.123",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        sender, approvals = FakeReviewSender(), FakeApprovalClient()
+        clients = {"slack_capture": FakeCaptureClient(), "notion": FakeNotion(),
+                   "triage": FakeTriage(), "review_sender": sender,
+                   "approval_client": approvals}
+        results = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        self.assertTrue(any(row[0] == "approval_flow" and row[2] == "question_posted" for row in results))
+        self.assertEqual(1, len(approvals.steps))
+        flow, step = approvals.steps[0]
+        self.assertEqual("recommendation", step["step_key"])
+        self.assertEqual("171.001", flow["thread_ts"])
+        self.assertIn("p-ops.example/review#approvals", flow["links_json"])
 
 
 if __name__ == "__main__":
