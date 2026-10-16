@@ -2,6 +2,7 @@ import base64
 import datetime as dt
 import io
 import json
+from pathlib import Path
 import tempfile
 import unittest
 import urllib.parse
@@ -94,6 +95,10 @@ class RuntimeTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_deployment_image_includes_runtime_workflow_module(self):
+        dockerfile = Path(__file__).with_name("Dockerfile").read_text()
+        self.assertIn("p_ops_workflow.py", dockerfile)
 
     def test_dashboard_requires_auth_and_escapes_source(self):
         status, headers, _ = request(self.app, "/review", auth=False)
