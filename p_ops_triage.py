@@ -273,7 +273,16 @@ class ClaudeTriageClient:
             with self.opener(request, timeout=90) as response:
                 result = json.load(response)
         except urllib.error.HTTPError as exc:
-            raise ValueError("Claude triage HTTP %d" % exc.code) from None
+            detail = ""
+            try:
+                error = json.loads(exc.read().decode())
+                detail = str((error.get("error") or {}).get("message") or "").strip()
+            except (AttributeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                pass
+            message = "Claude triage HTTP %d" % exc.code
+            if detail:
+                message += ": " + detail[:500]
+            raise ValueError(message) from None
         except (OSError, ValueError, TimeoutError):
             raise ValueError("Claude triage response unavailable") from None
         if result.get("stop_reason") != "end_turn":

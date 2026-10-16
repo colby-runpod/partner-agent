@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import unittest
+import urllib.error
 
 from p_ops_eval import bundle_from_case, load_cases, score_case, summary
 from p_ops_triage import ClaudeTriageClient, TriageDecision, guard_decision
@@ -34,6 +35,14 @@ class Response:
     def __enter__(self): return self
     def __exit__(self, *args): return None
     def read(self): return json.dumps(self.payload).encode()
+    def close(self): return None
+
+
+def http_error(code, message):
+    return urllib.error.HTTPError(
+        "https://api.anthropic.com/v1/messages", code, "error", {},
+        Response({"error": {"message": message}}),
+    )
 
 
 class TriageTests(unittest.TestCase):
@@ -72,6 +81,13 @@ class TriageTests(unittest.TestCase):
             {"type": "text", "text": json.dumps(decision())}]}
         client = ClaudeTriageClient("key", "model", opener=lambda request, timeout: Response(payload))
         self.assertEqual("create_task", client.analyze(BUNDLE).disposition)
+
+    def test_claude_client_surfaces_safe_api_error_detail(self):
+        def fail(request, timeout):
+            raise http_error(400, "model: invalid model name")
+        client = ClaudeTriageClient("key", "model", opener=fail)
+        with self.assertRaisesRegex(ValueError, "invalid model name"):
+            client.analyze(BUNDLE)
 
     def test_eval_corpus_has_25_valid_cases_and_history(self):
         path = Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl"
