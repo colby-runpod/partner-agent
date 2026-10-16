@@ -42,6 +42,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import assistant
 import chat
 import tasks
 from intake import Application, Store, api, flatten, verify
@@ -209,6 +210,7 @@ def config():
             if not os.environ.get(name):
                 raise ValueError('Missing environment setting: ' + name)
     tasks.config(cfg)
+    assistant.config(cfg)
     cfg['enabled'] = cfg['chat_enabled'] or cfg['review_enabled']
     return cfg
 
@@ -300,7 +302,8 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg)
+    event = accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg) or \
+        assistant.accept_agent(body, cfg)
     if event:
         return event
     if cfg.get('chat_enabled'):
@@ -323,6 +326,8 @@ def create_app():
                                'interactive': cfg.get('interactive', False),
                                'notion_write': cfg.get('notion_write', False),
                                'tasks_enabled': cfg.get('tasks_enabled', False),
+                               'agent_enabled': cfg.get('agent_enabled', False),
+                               'slack_user_token': bool(os.environ.get('SLACK_USER_TOKEN')),
                                'intake_enabled': False}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
@@ -1345,6 +1350,7 @@ def worker():
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
+        agent_writer = task_writer if cfg.get('tasks_enabled') else None
         while True:
             job = store.next_job()
             if not job:
@@ -1361,6 +1367,8 @@ def worker():
                 tasks.process_task(store, job, review_clients, cfg, task_writer)
             elif json.loads(job['payload']).get('kind') == 'task_action':
                 tasks.process_task_action(store, job, review_clients, task_writer)
+            elif json.loads(job['payload']).get('kind') == 'agent':
+                assistant.process_agent(store, job, review_clients, chat_clients, cfg, agent_writer)
             else:
                 chat.process(store, job, chat_clients)
 
