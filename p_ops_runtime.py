@@ -73,8 +73,11 @@ a { color: inherit; }
 .nav-label { margin: 0 10px 8px; color: var(--subtle); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .nav { display: grid; gap: 4px; }
 .nav a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border-radius: 8px; text-decoration: none; color: #34343b; font-size: 14px; }
+.nav a .nav-copy { display: flex; align-items: center; gap: 9px; }
+.nav svg { width: 17px; height: 17px; stroke-width: 2; color: #666873; }
 .nav a:hover { background: #f1f1f5; }
 .nav a.active { background: #ececf1; font-weight: 650; }
+.nav-spacer { height: 19px; }
 .nav-count { min-width: 24px; padding: 1px 7px; border-radius: 999px; background: #e2e2e8; color: #52545e; font-size: 11px; text-align: center; }
 .side-footer { margin-top: auto; padding: 16px 10px 2px; border-top: 1px solid var(--border); }
 .side-footer strong { display: block; font-size: 13px; }
@@ -83,7 +86,25 @@ a { color: inherit; }
 .main { min-width: 0; }
 .topbar { min-height: 66px; padding: 0 38px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .topbar-title { font-size: 14px; font-weight: 650; }
-.topbar-meta { display: flex; align-items: center; gap: 9px; }
+.topbar-actions, .topbar-meta { display: flex; align-items: center; gap: 9px; }
+.command-trigger { width: min(360px, 34vw); height: 36px; min-height: 36px; padding: 0 9px 0 12px; border-color: var(--border); background: #f7f7f9; color: var(--muted); display: flex; align-items: center; gap: 8px; text-align: left; font-weight: 450; }
+.command-trigger:hover { border-color: var(--border-strong); background: white; color: #41434c; }
+.command-trigger svg { width: 16px; height: 16px; }
+.command-trigger .shortcut { margin-left: auto; padding: 2px 6px; border: 1px solid #dbdce2; border-radius: 5px; background: white; color: #777985; font-size: 10px; }
+.icon-button { position: relative; width: 36px; height: 36px; min-height: 36px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; color: #33343b; }
+.icon-button:hover { border-color: var(--border); background: #f4f4f7; color: #17171c; }
+.icon-button svg { width: 19px; height: 19px; }
+.notification-badge { position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border: 2px solid white; border-radius: 999px; background: var(--purple); color: white; font-size: 9px; line-height: 12px; }
+.notification-wrap { position: relative; }
+.notification-panel { position: absolute; z-index: 20; top: 43px; right: 0; width: 330px; padding: 9px; border: 1px solid var(--border); border-radius: 11px; background: white; box-shadow: 0 16px 50px rgba(30,24,48,.16); }
+.notification-panel[hidden] { display: none; }
+.popover-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 9px 10px; }
+.popover-head strong { font-size: 13px; }
+.popover-head span { color: var(--subtle); font-size: 11px; }
+.notification-item { display: block; padding: 10px; border-radius: 7px; text-decoration: none; }
+.notification-item:hover { background: #f5f5f8; }
+.notification-item strong { display: block; font-size: 12px; }
+.notification-item span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 .environment { padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 12px; }
 .avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--purple); color: white; font-size: 11px; font-weight: 750; }
 .content { width: min(1240px, 100%); margin: 0 auto; padding: 42px 38px 72px; }
@@ -130,6 +151,49 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
 .empty { display: grid; place-items: center; min-height: 98px; padding: 22px; border: 1px dashed var(--border-strong); border-radius: 10px; background: rgba(255,255,255,.45); color: var(--muted); text-align: center; font-size: 13px; }
 .empty strong { display: block; margin-bottom: 3px; color: #3c3e47; font-weight: 600; }
 .page-footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--subtle); font-size: 11px; }
+.overview-grid { display: grid; grid-template-columns: 1.45fr 1fr; gap: 14px; margin: 0 0 32px; }
+.overview-panel { padding: 19px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.overview-panel h2 { margin: 0 0 4px; font-size: 15px; }
+.overview-panel > p { margin: 0; color: var(--muted); font-size: 12px; }
+.progress-track { height: 7px; margin: 18px 0 12px; overflow: hidden; border-radius: 999px; background: #ececf1; }
+.progress-value { height: 100%; border-radius: inherit; background: var(--purple); }
+.health-row { display: flex; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.health-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.health-row span { color: var(--muted); }
+.health-value { color: var(--text) !important; font-weight: 650; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.settings-card { padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.settings-card h2 { margin: 0; font-size: 16px; }
+.settings-card > p { margin: 5px 0 18px; color: var(--muted); font-size: 12px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 0; border-top: 1px solid var(--border); }
+.setting-copy strong { display: block; font-size: 13px; }
+.setting-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.switch { flex: 0 0 auto; width: 36px; height: 20px; padding: 2px; border-radius: 999px; background: #d8d9df; }
+.switch::after { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+.switch.on { background: var(--purple); }
+.switch.on::after { margin-left: 16px; }
+.activity-list { border: 1px solid var(--border); border-radius: 10px; background: white; overflow: hidden; }
+.activity-row { display: grid; grid-template-columns: minmax(140px,1.5fr) minmax(90px,.5fr) minmax(140px,1fr); gap: 18px; align-items: center; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+.activity-row:last-child { border-bottom: 0; }
+.activity-title strong { display: block; font-size: 13px; }
+.activity-title span, .activity-source { color: var(--muted); font-size: 11px; }
+.modal-open { overflow: hidden; }
+.command-overlay { position: fixed; z-index: 50; inset: 0; padding: 10vh 18px 18px; background: rgba(24,22,31,.44); backdrop-filter: blur(2px); }
+.command-overlay[hidden] { display: none; }
+.command-dialog { width: min(620px, 100%); max-height: 72vh; margin: 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 13px; background: white; box-shadow: 0 28px 80px rgba(20,16,38,.25); }
+.command-input-wrap { display: flex; align-items: center; gap: 11px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.command-input-wrap svg { width: 19px; height: 19px; color: var(--muted); }
+.command-input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 15px; }
+.command-close { min-height: 26px; padding: 3px 7px; border-color: var(--border); background: white; color: var(--muted); font-size: 10px; }
+.command-results { max-height: calc(72vh - 58px); overflow-y: auto; padding: 8px; }
+.command-group-label { padding: 8px 9px 5px; color: var(--subtle); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.command-item { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 10px 11px; border-radius: 7px; text-decoration: none; }
+.command-item[hidden], .command-empty[hidden] { display: none; }
+.command-item:hover { background: var(--purple-soft); }
+.command-item strong { display: block; font-size: 13px; }
+.command-item span { color: var(--muted); font-size: 11px; }
+.command-item kbd { color: var(--subtle); font: inherit; font-size: 10px; }
+.command-empty { padding: 32px; color: var(--muted); text-align: center; font-size: 13px; }
 @media (max-width: 940px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; width: 100%; height: auto; padding: 16px 20px; display: block; }
@@ -137,16 +201,24 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
   .nav-label, .side-footer { display: none; }
   .nav { display: flex; overflow-x: auto; padding-bottom: 2px; }
   .nav a { flex: 0 0 auto; }
+  .nav-spacer { display: none; }
   .topbar { padding: 0 22px; }
   .content { padding: 30px 22px 56px; }
-  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metrics, .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .topbar-meta .environment { display: none; }
+  .topbar { gap: 10px; }
+  .command-trigger { width: 38px; justify-content: center; padding: 0; }
+  .command-trigger span:not(.shortcut), .command-trigger .shortcut { display: none; }
   .hero, .safety { align-items: flex-start; flex-direction: column; }
   .gates { justify-content: flex-start; }
   .metrics { grid-template-columns: 1fr 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
   .card-head { flex-direction: column; gap: 9px; }
+  .notification-panel { position: fixed; top: 62px; right: 10px; left: 10px; width: auto; }
+  .activity-row { grid-template-columns: 1fr; gap: 6px; }
 }
 """
 
@@ -281,12 +353,28 @@ def _section(section_id, title, detail, cards):
                              count, "item" if count == 1 else "items", content))
 
 
+def _icon(name):
+    paths = {
+        "dashboard": "<rect x='3' y='3' width='7' height='7' rx='1'/><rect x='14' y='3' width='7' height='7' rx='1'/><rect x='3' y='14' width='7' height='7' rx='1'/><rect x='14' y='14' width='7' height='7' rx='1'/>",
+        "activity": "<path d='M3 12h4l3-8 4 16 3-8h4'/>",
+        "capture": "<path d='M4 5h16v14H4z'/><path d='m4 7 8 6 8-6'/>",
+        "tasks": "<path d='M9 11l3 3L22 4'/><path d='M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'/>",
+        "message": "<path d='M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z'/>",
+        "linear": "<path d='m16 3 5 5-13 13H3v-5z'/><path d='m15 4 5 5'/>",
+        "triage": "<path d='M12 2v4'/><path d='M12 18v4'/><path d='m4.93 4.93 2.83 2.83'/><path d='m16.24 16.24 2.83 2.83'/><path d='M2 12h4'/><path d='M18 12h4'/><circle cx='12' cy='12' r='4'/>",
+        "settings": "<circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V21h-4v-.08a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3v-4h.08a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3h4v.08a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.12.61.55 1.1 1.15 1.32.15.05.3.08.45.08v4h-.08A1.7 1.7 0 0 0 19.4 15z'/>",
+        "search": "<circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/>",
+        "bell": "<path d='M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9'/><path d='M13.7 21a2 2 0 0 1-3.4 0'/>",
+    }
+    return "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>%s</svg>" % paths[name]
+
+
 class Dashboard:
     def __init__(self, cfg, capture, inbox, messages, linear, notion, triage):
         self.cfg, self.capture, self.inbox = cfg, capture, inbox
         self.messages, self.linear, self.notion, self.triage = messages, linear, notion, triage
 
-    def render(self):
+    def render(self, page="dashboard"):
         captures = self.capture.rows(("pending", "resolving", "captured", "review"))
         inbox_rows = self.inbox.rows(REVIEW_STATES)
         message_rows = self.messages.rows(REVIEW_STATES)
@@ -295,9 +383,11 @@ class Dashboard:
         triage_rows = self.triage.rows(("shadow", "error"))
 
         sections = []
+        activity = []
         cards = [_card("Slack capture", row["state"], row.get("source_text") or row.get("error") or "Waiting to resolve",
                        kind="Slack capture")
                  for row in captures]
+        activity.extend(("Slack capture", row["state"], row.get("source_text") or "Captured Slack work") for row in captures)
         sections.append(_section("captures", "Captures", "Slack reactions waiting to be resolved or classified.", cards))
 
         cards = []
@@ -311,6 +401,7 @@ class Dashboard:
                 buttons = _button(self.cfg, "inbox", "reject", row["id"], "Cancel approval")
             cards.append(_card(data["title"], row["state"], data["context"] + "\n\nNext: " + data["next_step"],
                                buttons, "Task proposal"))
+            activity.append((data["title"], row["state"], "Task proposal"))
         sections.append(_section("task-proposals", "Task proposals",
                                  "New tasks proposed from captured work and supporting evidence.", cards))
 
@@ -327,6 +418,7 @@ class Dashboard:
             cards.append(_card("%s to %s" % (row["kind"].title(), row["destination"]), row["state"],
                                ((row["subject"] + "\n\n") if row["subject"] else "") + row["content"], buttons,
                                "Message draft"))
+            activity.append(("%s to %s" % (row["kind"].title(), row["destination"]), row["state"], "Message draft"))
         sections.append(_section("messages", "Messages", "Drafts that require review before anything is sent.", cards))
 
         cards = []
@@ -338,6 +430,7 @@ class Dashboard:
             elif row["state"] == "approved":
                 buttons = _button(self.cfg, "linear", "reject", row["id"], "Cancel approval")
             cards.append(_card(row["title"], row["state"], row["description"], buttons, "Linear issue"))
+            activity.append((row["title"], row["state"], "Linear issue"))
         sections.append(_section("linear", "Linear", "Engineering work that may need a linked Linear issue.", cards))
 
         cards = []
@@ -346,6 +439,7 @@ class Dashboard:
             buttons = (_button(self.cfg, "notion", "approve", row["id"], "Approve update") +
                        _button(self.cfg, "notion", "reject", row["id"], "Reject")) if row["state"] == "needs_review" else ""
             cards.append(_card(row["title"], row["state"], plan.get("reason", ""), buttons, "Notion task update"))
+            activity.append((row["title"], row["state"], "Notion task update"))
         sections.append(_section("task-updates", "Task updates",
                                  "Proposed changes to active Working Tasks in Notion.", cards))
 
@@ -364,6 +458,7 @@ class Dashboard:
                 title = bundle["source"].get("text", "Shadow triage")[:120]
                 body = row["error"] or "Triage failed."
             cards.append(_card(title, row["state"], body, kind="Read-only evaluation"))
+            activity.append((title, row["state"], "Read-only evaluation"))
         sections.append(_section("shadow-triage", "Shadow triage",
                                  "Read-only decisions used to calibrate the agent before automation.", cards))
 
@@ -378,8 +473,6 @@ class Dashboard:
         all_rows = captures + inbox_rows + message_rows + linear_rows + notion_rows + triage_rows
         needs_review = sum(1 for row in all_rows if row["state"] in ("needs_review", "review", "conflict"))
         approved = sum(1 for row in all_rows if row["state"] in ("approved", "send_authorized"))
-        nav = "".join("<a href='#%s'><span>%s</span><span class='nav-count'>%d</span></a>" %
-                      (section_id, html.escape(label), count) for section_id, label, count in groups)
         metrics = "".join(
             "<div class='metric'><strong class='metric-value'>%d</strong><span class='metric-label'>%s</span></div>" % item
             for item in ((needs_review, "Needs review"), (approved, "Approved"),
@@ -392,21 +485,117 @@ class Dashboard:
         )
         gate_html = "".join("<span class='gate'>%s: %s</span>" %
                             (html.escape(label), "on" if enabled else "off") for label, enabled in gates)
-        return ("<div class='shell'><aside class='sidebar'><a class='brand' href='/review' aria-label='Runpod partner ops'>"
-                "<img src='/assets/runpod-logo-purple.png' alt='Runpod'></a><p class='nav-label'>Queues</p>"
-                "<nav class='nav'><a class='active' href='#overview'><span>Overview</span><span class='nav-count'>%d</span>"
-                "</a>%s</nav><div class='side-footer'><strong><span class='status-dot'></span>Agent online</strong>"
-                "<span>Partner ops · production</span></div></aside><main class='main'><header class='topbar'>"
-                "<span class='topbar-title'>Partner ops</span><div class='topbar-meta'><span class='environment'>Production</span>"
-                "<span class='avatar' aria-label='Colby'>CH</span></div></header><div class='content' id='overview'>"
-                "<div class='hero'><div><p class='eyebrow'>Operations console</p><h1>Partner ops review</h1>"
-                "<p class='lede'>Review agent recommendations, approve exact actions, and keep work moving without bypassing "
-                "the write or send controls.</p></div><span class='mode-pill'>Guarded mode</span></div>"
-                "<div class='safety'><div class='safety-copy'><strong>Automation safety controls</strong>"
-                "<span>Approvals here only update the action queue. External changes still require their configured gate.</span>"
-                "</div><div class='gates'>%s</div></div><div class='metrics'>%s</div>%s"
-                "<footer class='page-footer'>Runpod Partner Ops · Internal operator console</footer></div></main></div>" %
-                (len(all_rows), nav, gate_html, metrics, "".join(sections)))
+        if page == "settings":
+            setting_rows = "".join(
+                "<div class='setting-row'><div class='setting-copy'><strong>%s</strong><span>%s</span></div>"
+                "<span class='switch %s' aria-label='%s'></span></div>" %
+                (html.escape(label), html.escape(detail), "on" if enabled else "", "on" if enabled else "off")
+                for label, detail, enabled in (
+                    ("Daily task review", "Runs the Working Tasks preview once per Mountain Time day.", bool(self.cfg.get("daily_review"))),
+                    ("Shadow triage", "Evaluates captured work without making external changes.", bool(self.cfg.get("triage_shadow"))),
+                    ("Slack review posts", "Posts review requests only to the approved internal channel.", bool(self.cfg.get("review_posting"))),
+                    ("Slack capture", "Accepts the configured handshake reaction as a capture signal.", bool(self.cfg.get("enabled"))),
+                ))
+            write_rows = "".join(
+                "<div class='setting-row'><div class='setting-copy'><strong>%s</strong><span>%s</span></div>"
+                "<span class='switch %s' aria-label='%s'></span></div>" %
+                (html.escape(label), html.escape(detail), "on" if enabled else "", "on" if enabled else "off")
+                for label, detail, enabled in (
+                    ("Notion writes", "Allows approved Working Task updates to be applied.", os.environ.get("P_OPS_NOTION_WRITE") == "true"),
+                    ("Notion task creation", "Allows approved task proposals to create Notion records.", os.environ.get("P_OPS_NOTION_CREATE") == "true"),
+                    ("Linear writes", "Allows approved engineering issues to be created.", os.environ.get("P_OPS_LINEAR_WRITE") == "true"),
+                    ("Message sending", "Allows separately authorized messages to be sent.", os.environ.get("P_OPS_SEND_MESSAGES") == "true"),
+                ))
+            main_content = ("<div class='hero'><div><p class='eyebrow'>Admin</p><h1>Settings</h1>"
+                            "<p class='lede'>View the production configuration and automation boundaries. Change these in Railway, then redeploy.</p>"
+                            "</div><span class='mode-pill'>Read only</span></div><div class='settings-grid'>"
+                            "<section class='settings-card'><h2>Processing</h2><p>Controls that determine what the agent reads and evaluates.</p>%s</section>"
+                            "<section class='settings-card'><h2>External actions</h2><p>High-impact gates remain off until explicitly enabled.</p>%s</section>"
+                            "<section class='settings-card'><h2>Destinations</h2><p>Approved internal routing for the production agent.</p>"
+                            "<div class='health-row'><span>Review channel</span><span class='health-value'>%s</span></div>"
+                            "<div class='health-row'><span>Database</span><span class='health-value'>Persistent SQLite</span></div>"
+                            "<div class='health-row'><span>Timezone</span><span class='health-value'>America/Denver</span></div></section>"
+                            "<section class='settings-card'><h2>Security</h2><p>Runtime protections applied to every operator session.</p>"
+                            "<div class='health-row'><span>Dashboard authentication</span><span class='health-value'>Required</span></div>"
+                            "<div class='health-row'><span>Approval tokens</span><span class='health-value'>CSRF protected</span></div>"
+                            "<div class='health-row'><span>Browser caching</span><span class='health-value'>Disabled</span></div></section></div>" %
+                            (setting_rows, write_rows, html.escape(self.cfg.get("review_channel") or "Not configured")))
+        elif page == "activity":
+            rows = "".join(
+                "<div class='activity-row'><div class='activity-title'><strong>%s</strong><span>%s</span></div>"
+                "<div><span class='state state-%s'>%s</span></div><span class='activity-source'>Current queue</span></div>" %
+                (html.escape(title), html.escape(source), html.escape(state.replace("_", "-")),
+                 html.escape(state.replace("_", " "))) for title, state, source in activity)
+            main_content = ("<div class='hero'><div><p class='eyebrow'>Operations</p><h1>Activity</h1>"
+                            "<p class='lede'>A combined view of the work currently moving through the Partner Ops queues.</p>"
+                            "</div><span class='mode-pill'>%d open</span></div><div class='activity-list'>%s</div>" %
+                            (len(activity), rows or _empty("No activity yet", "Captured and evaluated work will appear here.")))
+        else:
+            completion = 100 if not all_rows else max(0, round((len(all_rows) - needs_review) / len(all_rows) * 100))
+            overview = ("<div class='overview-grid'><section class='overview-panel'><h2>Queue health</h2>"
+                        "<p>Share of current items that do not require operator attention.</p><div class='progress-track'>"
+                        "<div class='progress-value' style='width:%d%%'></div></div><div class='health-row'>"
+                        "<span>Clear or progressing</span><span class='health-value'>%d%%</span></div></section>"
+                        "<section class='overview-panel'><h2>Agent status</h2><p>Current production processing state.</p>"
+                        "<div class='health-row'><span>Runtime</span><span class='health-value'>Online</span></div>"
+                        "<div class='health-row'><span>Daily review</span><span class='health-value'>%s</span></div>"
+                        "<div class='health-row'><span>Operating mode</span><span class='health-value'>Guarded</span></div></section></div>" %
+                        (completion, completion, "Enabled" if self.cfg.get("daily_review") else "Disabled"))
+            main_content = ("<div class='hero'><div><p class='eyebrow'>Operations console</p><h1>Partner ops dashboard</h1>"
+                            "<p class='lede'>Review recommendations, approve exact actions, and keep partner work moving without bypassing the write or send controls.</p>"
+                            "</div><span class='mode-pill'>Guarded mode</span></div><div class='safety'>"
+                            "<div class='safety-copy'><strong>Automation safety controls</strong><span>Approvals here only update the action queue. External changes still require their configured gate.</span>"
+                            "</div><div class='gates'>%s</div></div><div class='metrics'>%s</div>%s%s" %
+                            (gate_html, metrics, overview, "".join(sections)))
+
+        queue_nav = "".join(
+            "<a href='/review#%s'><span class='nav-copy'>%s<span>%s</span></span><span class='nav-count'>%d</span></a>" %
+            (section_id, _icon(icon), html.escape(label), count)
+            for (section_id, label, count), icon in zip(groups, ("capture", "tasks", "message", "linear", "tasks", "triage")))
+        page_nav = (
+            "<a class='%s' href='/review'><span class='nav-copy'>%s<span>Dashboard</span></span></a>"
+            "<a class='%s' href='/activity'><span class='nav-copy'>%s<span>Activity</span></span></a>" %
+            ("active" if page == "dashboard" else "", _icon("dashboard"),
+             "active" if page == "activity" else "", _icon("activity")))
+        settings_nav = "<a class='%s' href='/settings'><span class='nav-copy'>%s<span>Settings</span></span></a>" % (
+            "active" if page == "settings" else "", _icon("settings"))
+        notifications = [(label, count, section_id) for section_id, label, count in groups if count]
+        notification_items = "".join(
+            "<a class='notification-item' href='/review#%s'><strong>%s</strong><span>%d %s in this queue</span></a>" %
+            (section_id, html.escape(label), count, "item" if count == 1 else "items")
+            for label, count, section_id in notifications)
+        if not notification_items:
+            notification_items = "<div class='notification-item'><strong>You're all caught up</strong><span>No queue items need attention.</span></div>"
+        command_items = "".join(
+            "<a class='command-item' data-command-item data-command-query='%s' href='%s'><div><strong>%s</strong>"
+            "<span>%s</span></div><kbd>Open</kbd></a>" % tuple(html.escape(value, quote=True) for value in item)
+            for item in (
+                ("dashboard home overview", "/review", "Dashboard", "Review queue health and pending actions"),
+                ("activity history recent work", "/activity", "Activity", "See work across every queue"),
+                ("settings configuration gates", "/settings", "Settings", "Inspect automation controls and destinations"),
+            ) + tuple((label.lower(), "/review#" + section_id, label, "%d current items" % count)
+                      for section_id, label, count in groups))
+        title = {"dashboard": "Dashboard", "activity": "Activity", "settings": "Settings"}.get(page, "Dashboard")
+        shell = ("<div class='shell'><aside class='sidebar'><a class='brand' href='/review' aria-label='Runpod partner ops'>"
+                 "<img src='/assets/runpod-logo-purple.png' alt='Runpod'></a><p class='nav-label'>Partner ops</p>"
+                 "<nav class='nav'>%s<div class='nav-spacer'></div><p class='nav-label'>Work queues</p>%s"
+                 "<div class='nav-spacer'></div><p class='nav-label'>Admin</p>%s</nav>"
+                 "<div class='side-footer'><strong><span class='status-dot'></span>Agent online</strong>"
+                 "<span>Partner ops · production</span></div></aside><main class='main'><header class='topbar'>"
+                 "<span class='topbar-title'>Partner ops / %s</span><div class='topbar-actions'>"
+                 "<button class='command-trigger' data-open-command aria-label='Open command search'>%s<span>Search or jump to...</span><span class='shortcut'>⌘K</span></button>"
+                 "<div class='notification-wrap'><button class='icon-button' data-notification-button aria-label='Notifications' aria-expanded='false'>%s%s</button>"
+                 "<div class='notification-panel' data-notification-panel hidden><div class='popover-head'><strong>Notifications</strong><span>%d open</span></div>%s</div></div>"
+                 "<span class='environment'>Runpod</span><span class='avatar' aria-label='Colby'>CH</span></div></header>"
+                 "<div class='content'>%s<footer class='page-footer'>Runpod Partner Ops · Internal operator console</footer></div></main></div>"
+                 "<div class='command-overlay' data-command-palette hidden><div class='command-dialog' role='dialog' aria-modal='true' aria-label='Command search'>"
+                 "<div class='command-input-wrap'>%s<input class='command-input' data-command-input placeholder='Search pages and queues' aria-label='Search commands'>"
+                 "<button class='command-close' data-close-command>Esc</button></div><div class='command-results'><p class='command-group-label'>Navigate</p>%s"
+                 "<div class='command-empty' data-command-empty hidden>No matching pages or queues.</div></div></div></div>" %
+                 (page_nav, queue_nav, settings_nav, html.escape(title), _icon("search"), _icon("bell"),
+                  "<span class='notification-badge'>%d</span>" % needs_review if needs_review else "", needs_review,
+                  notification_items, main_content, _icon("search"), command_items))
+        return shell
 
     def action(self, kind, action, item_id):
         if kind == "inbox" and action == "approve": self.inbox.approve(item_id)
@@ -433,12 +622,17 @@ class RuntimeApp:
                     ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "same-origin")]
             start(code, base + list(headers)); return [raw]
         path, method = env.get("PATH_INFO"), env.get("REQUEST_METHOD")
-        if path in ("/assets/runpod-logo-purple.png", "/assets/runpod-icon.png") and method == "GET":
+        asset_types = {
+            "/assets/runpod-logo-purple.png": "image/png",
+            "/assets/runpod-icon.png": "image/png",
+            "/assets/p_ops_console.js": "application/javascript; charset=utf-8",
+        }
+        if path in asset_types and method == "GET":
             filename = path.rsplit("/", 1)[-1]
             asset = Path(__file__).with_name("assets") / filename
             if not asset.is_file():
                 return respond("404 Not Found", "{}")
-            return respond("200 OK", asset.read_bytes(), "image/png",
+            return respond("200 OK", asset.read_bytes(), asset_types[path],
                            (("Cache-Control", "public, max-age=86400, immutable"),))
         if path == "/healthz" and method == "GET":
             return respond("200 OK", json.dumps({"status": "listening", "p_ops_enabled": self.cfg["runtime_enabled"],
@@ -450,19 +644,21 @@ class RuntimeApp:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
             return self.slack_app(env, start)
-        if path not in {"/review", "/review/action"}:
+        if path not in {"/review", "/review/action", "/activity", "/settings"}:
             return respond("404 Not Found", "{}")
         if not _basic_authorized(env, self.cfg):
             return respond("401 Unauthorized", "Authentication required", "text/plain; charset=utf-8",
                            (("WWW-Authenticate", 'Basic realm="p-OPS review"'),))
-        if path == "/review" and method == "GET":
+        if path in {"/review", "/activity", "/settings"} and method == "GET":
+            page = {"/review": "dashboard", "/activity": "activity", "/settings": "settings"}[path]
             body = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
                     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                     "<meta name='theme-color' content='#5d29f0'><title>Partner ops · Runpod</title>"
                     "<link rel='icon' type='image/png' href='/assets/runpod-icon.png'>"
-                    "<style>%s</style></head><body>%s</body></html>" % (DASHBOARD_CSS, self.dashboard.render()))
+                    "<style>%s</style><script src='/assets/p_ops_console.js' defer></script></head><body>%s</body></html>" %
+                    (DASHBOARD_CSS, self.dashboard.render(page)))
             return respond("200 OK", body, "text/html; charset=utf-8",
-                           (("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+                           (("Content-Security-Policy", "default-src 'none'; img-src 'self'; script-src 'self'; style-src 'unsafe-inline'; "
                                                        "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"),))
         if path == "/review/action" and method == "POST":
             try:
