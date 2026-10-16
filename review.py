@@ -43,6 +43,7 @@ import urllib.parse
 import urllib.request
 
 import chat
+import tasks
 from intake import Application, Store, api, flatten, verify
 
 DIGEST_MARKERS = ('PARTNERSHIP MQL DIGEST', 'Incoming Partnership Request')
@@ -207,6 +208,7 @@ def config():
         for name in ('SLACK_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'):
             if not os.environ.get(name):
                 raise ValueError('Missing environment setting: ' + name)
+    tasks.config(cfg)
     cfg['enabled'] = cfg['chat_enabled'] or cfg['review_enabled']
     return cfg
 
@@ -298,7 +300,7 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = accept_manual(body, cfg) or accept_feedback(body, cfg)
+    event = accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg)
     if event:
         return event
     if cfg.get('chat_enabled'):
@@ -320,6 +322,7 @@ def create_app():
                                'summary_enabled': cfg['summary_enabled'], 'summary_hour': cfg['summary_hour'],
                                'interactive': cfg.get('interactive', False),
                                'notion_write': cfg.get('notion_write', False),
+                               'tasks_enabled': cfg.get('tasks_enabled', False),
                                'intake_enabled': False}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
@@ -342,7 +345,7 @@ def interactions(env, start, cfg, store):
         if not verify(cfg['secret'], env.get('HTTP_X_SLACK_REQUEST_TIMESTAMP'), env.get('HTTP_X_SLACK_SIGNATURE'), raw):
             return respond('401 Unauthorized')
         payload = json.loads(urllib.parse.parse_qs(raw.decode())['payload'][0])
-        event = accept_action(payload, cfg)
+        event = accept_action(payload, cfg) or tasks.accept_task_action(payload, cfg)
         if event:
             store.enqueue(event)
         return respond('200 OK')
@@ -835,6 +838,17 @@ class ReviewClients:
             message['blocks'] = card_blocks(message['text'], buttons)
         self.last_posted_text = message['text']
         return api('https://slack.com/api/chat.postMessage', token, message).get('ts')
+
+    def say_blocks(self, channel, thread_ts, text, blocks=None):
+        message = {'channel': channel, 'thread_ts': thread_ts, 'text': text, 'parse': 'none',
+                   'unfurl_links': False, 'unfurl_media': False}
+        if blocks:
+            message['blocks'] = blocks
+        api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'], message)
+
+    def update_blocks(self, channel, ts, text, blocks):
+        api('https://slack.com/api/chat.update', os.environ['SLACK_BOT_TOKEN'],
+            {'channel': channel, 'ts': ts, 'text': text, 'blocks': blocks})
 
     def update_card(self, channel, ts, text, buttons, notes):
         api('https://slack.com/api/chat.update', os.environ['SLACK_BOT_TOKEN'],
@@ -1330,6 +1344,7 @@ def worker():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
+        task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
         while True:
             job = store.next_job()
             if not job:
@@ -1342,6 +1357,10 @@ def worker():
                 process_feedback(store, job, review_clients, ledger)
             elif json.loads(job['payload']).get('kind') == 'action':
                 process_action(store, job, review_clients, ledger, cfg, notion)
+            elif json.loads(job['payload']).get('kind') == 'task':
+                tasks.process_task(store, job, review_clients, cfg, task_writer)
+            elif json.loads(job['payload']).get('kind') == 'task_action':
+                tasks.process_task_action(store, job, review_clients, task_writer)
             else:
                 chat.process(store, job, chat_clients)
 
