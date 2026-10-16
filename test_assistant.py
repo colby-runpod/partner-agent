@@ -233,5 +233,123 @@ class PlainTests(unittest.TestCase):
         self.assertEqual(P('rollup', {'x': 1}), '')
 
 
+
+class ContextTests(unittest.TestCase):
+    FWD = {'is_share': True, 'author_name': 'Rei', 'text': 'Still listing the product.',
+           'from_url': 'https://runpod-team.slack.com/archives/C09UGSU62R4/p1792167034178459?thread_ts=1792160000.000100&cid=C09UGSU62R4',
+           'files': [{'url_private': 'https://files.slack.com/a.png', 'mimetype': 'image/png', 'size': 1000, 'name': 'a.png'},
+                     {'url_private': 'https://evil.example/b.png', 'mimetype': 'image/png', 'size': 10},
+                     {'url_private': 'https://files.slack.com/c.pdf', 'mimetype': 'application/pdf', 'size': 10}]}
+
+    def test_forward_parses_thread_and_files(self):
+        f = tasks.forwarded({'attachments': [self.FWD]})
+        self.assertEqual((f['channel'], f['ts'], f['thread_ts']), ('C09UGSU62R4', '1792167034.178459', '1792160000.000100'))
+        self.assertEqual([x['url'] for x in f['files']], ['https://files.slack.com/a.png'])
+        plain = dict(self.FWD, from_url='https://runpod.slack.com/archives/C1/p1792167034178459')
+        self.assertEqual(tasks.forwarded({'attachments': [plain]})['thread_ts'], '1792167034.178459')
+
+    def test_only_read_methods(self):
+        with self.assertRaises(ValueError):
+            agent.Context(ACFG)._read('chat.postMessage', {})
+
+    @patch.dict('os.environ', {'SLACK_USER_TOKEN': 'xoxp-user', 'SLACK_BOT_TOKEN': 'xoxb-bot'})
+    def test_thread_prefers_user_token_and_names_people(self):
+        calls = []
+        def fake(url, token, payload=None, version=None):
+            calls.append((url.split('/api/')[1].split('?')[0], token))
+            if 'users.info' in url:
+                return {'user': {'team_id': 'TEXT', 'is_stranger': True, 'profile': {'real_name': 'Rei Mendes', 'title': 'Partnerships, Suger'}}}
+            if token == 'xoxp-user':
+                return {'messages': [{'user': 'U9', 'ts': '1.1', 'text': 'Started listing',
+                                      'files': [{'url_private': 'https://files.slack.com/s.png', 'mimetype': 'image/png', 'size': 5}]},
+                                     {'bot_id': 'B1', 'username': 'HubSpot', 'ts': '1.2', 'text': 'digest'}]}
+        with patch('assistant.api', side_effect=fake):
+            ctx = agent.Context(ACFG)
+            messages, files = ctx.thread('C9', '1.1')
+            ctx.person('U9')
+        self.assertEqual(calls[0], ('conversations.replies', 'xoxp-user'))
+        self.assertEqual(messages[0]['from'], {'name': 'Rei Mendes', 'title': 'Partnerships, Suger', 'external': True})
+        self.assertEqual(messages[1]['from'], {'bot': 'HubSpot'})
+        self.assertEqual(files[0]['url'], 'https://files.slack.com/s.png')
+        self.assertEqual(sum(1 for c in calls if c[0] == 'users.info'), 1)  # cached
+
+    @patch.dict('os.environ', {'SLACK_USER_TOKEN': 'xoxp-user', 'SLACK_BOT_TOKEN': 'xoxb-bot'})
+    def test_falls_back_to_bot_token(self):
+        def fake(url, token, payload=None, version=None):
+            if token == 'xoxp-user':
+                raise ValueError('not_in_channel')
+            return {'messages': [{'user': '', 'ts': '1.1', 'text': 'hi'}]}
+        with patch('assistant.api', side_effect=fake):
+            messages, _ = agent.Context(ACFG).thread('C9', '1.1')
+        self.assertEqual(messages[0]['text'], 'hi')
+
+    @patch.dict('os.environ', {'SLACK_BOT_TOKEN': 'xoxb-bot'}, clear=True)
+    def test_image_download(self):
+        class Resp:
+            def __init__(self, kind): self.headers = {'Content-Type': kind}
+            def read(self, n): return b'PNGDATA'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        ctx = agent.Context(ACFG)
+        with patch('assistant.urllib.request.urlopen', return_value=Resp('image/png')):
+            block = ctx.image({'url': 'https://files.slack.com/a.png', 'mimetype': 'image/png'})
+        self.assertEqual(block['source']['data'], 'UE5HREFUQQ==')
+        with patch('assistant.urllib.request.urlopen', return_value=Resp('text/html')):
+            self.assertIsNone(ctx.image({'url': 'https://files.slack.com/a.png', 'mimetype': 'image/png'}))
+        self.assertIsNone(ctx.image({'url': 'https://evil.example/a.png', 'mimetype': 'image/png'}))
+
+    def test_gather_paths(self):
+        class Ctx:
+            def __init__(self, fail=False): self.fail, self.asked = fail, []
+            def thread(self, channel, ts, latest=None):
+                self.asked.append((channel, ts, latest))
+                if self.fail: raise ValueError('no access')
+                return [{'from': {'name': 'Rei'}, 'text': 'full thread'}], [{'url': 'https://files.slack.com/t.png', 'mimetype': 'image/png'}]
+            def image(self, ref): return {'type': 'image', 'source': {'url': ref['url']}}
+        fwd = tasks.forwarded({'attachments': [self.FWD]})
+        event = dict(channel='C1', ts='80.1', thread_ts='80.1', forward=fwd,
+                     files=[{'url': 'https://files.slack.com/m.png', 'mimetype': 'image/png'}] * 3)
+        c = Ctx(); found, blocks = agent.gather(event, c)
+        self.assertEqual(c.asked, [('C09UGSU62R4', '1792160000.000100', None)])
+        self.assertEqual(found['source'][0]['text'], 'full thread')
+        self.assertEqual(len(blocks), 3)  # deduped: m.png, a.png, t.png
+        c = Ctx(fail=True); found, _ = agent.gather(event, c)
+        self.assertIsNone(found['source']); self.assertIn("Couldn't open the original thread", found['note'])
+        c = Ctx(); found, _ = agent.gather(dict(channel='C1', ts='81.1', thread_ts='60.1', forward=None, files=[]), c)
+        self.assertEqual(c.asked, [('C1', '60.1', '81.1')])
+
+    def test_images_and_thread_reach_the_model(self):
+        c = Clients([final('Suger began listing. *Recommended next step:* update the GCP task.')])
+        event = agent.accept_agent(ASK, ACFG)
+        tools = agent.Tools(ACFG, event, c, Chat(), None)
+        found = {'source': [{'from': {'name': 'Rei'}, 'text': 'x'}], 'note': 'n', 'images': 1}
+        agent.run_agent(event, c, tools, ACFG, found, [{'type': 'image', 'source': {}}])
+        content = c.payloads[0]['messages'][0]['content']
+        self.assertEqual([b['type'] for b in content], ['text', 'image'])
+        self.assertEqual(json.loads(content[0]['text'])['source_thread'][0]['from']['name'], 'Rei')
+        self.assertIn('Recommended next step', agent.AGENT_INSTRUCTIONS)
+
+    def test_process_agent_gathers_context(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q'); store.enqueue(agent.accept_agent(ASK, ACFG)); c = Clients([final('ok')])
+            with patch('assistant.gather', return_value=({'source': None, 'note': 'only forward', 'images': 0}, [])) as g:
+                agent.process_agent(store, store.next_job(), c, Chat(), ACFG, None)
+            g.assert_called_once()
+            self.assertEqual(json.loads(c.payloads[0]['messages'][0]['content'])['context_note'], 'only forward')
+
+    def test_task_capture_uses_original_thread(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d + '/q')
+            body = dict(ASK, event=dict(ASK['event'], text='<@UBOT> flag this as a task', attachments=[self.FWD]))
+            store.enqueue(tasks.accept_task(body, ACFG)); c = Clients([final(json.dumps(
+                {'item': 'Follow up with Suger on GCP listing', 'next_step': 'Ask Rei for the next milestone'}))])
+            w = Writer()
+            with patch('assistant.Context.thread', return_value=([{'from': {'name': 'Rei'}, 'text': 'thread detail'}], [])):
+                tasks.process_task(store, store.next_job(), c, ACFG, w)
+            sent = json.loads(c.payloads[0]['messages'][0]['content'])['source_message']
+            self.assertIn('thread detail', sent)
+            self.assertEqual(w.created[0][1], 'slack:C09UGSU62R4:1792167034.178459')
+
+
 if __name__ == '__main__':
     unittest.main()
