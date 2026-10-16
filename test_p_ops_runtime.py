@@ -98,6 +98,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(b"&lt;script&gt;", body)
         self.assertEqual("no-store", headers["Cache-Control"])
 
+    def test_dashboard_uses_runpod_operator_console_and_serves_brand_assets(self):
+        status, headers, body = request(self.app, "/review")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"Runpod", body)
+        self.assertIn(b"Partner ops review", body)
+        self.assertIn(b"Automation safety controls", body)
+        self.assertIn(b"Task updates", body)
+        self.assertIn("img-src 'self'", headers["Content-Security-Policy"])
+        status, headers, asset = request(self.app, "/assets/runpod-logo-purple.png", auth=False)
+        self.assertEqual("200 OK", status)
+        self.assertEqual("image/png", headers["Content-Type"])
+        self.assertTrue(asset.startswith(b"\x89PNG"))
+
     def test_csrf_protected_review_action(self):
         message_id = self.stores[2].create("slack", "C1", "Ready to send")
         bad = urllib.parse.urlencode({"kind": "message", "action": "approve", "id": message_id,
