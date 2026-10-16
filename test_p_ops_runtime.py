@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import urllib.parse
 
-from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, run_once
+from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, config, run_once
 from p_ops_triage import TriageDecision
 
 
@@ -76,6 +76,14 @@ class FakeReviewSender:
         return "171.001"
 
 
+class FakeApprovalClient:
+    def __init__(self): self.steps = []
+    def post_step(self, flow, step):
+        self.steps.append((flow, step))
+        return "172.001"
+    def post_outcome(self, flow, outcome): pass
+
+
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -107,6 +115,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(b"Task updates", body)
         self.assertIn(b"Search or jump to", body)
         self.assertIn(b"Notifications", body)
+        self.assertIn(b"Approvals", body)
         self.assertIn("img-src 'self'", headers["Content-Security-Policy"])
         self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
         status, headers, asset = request(self.app, "/assets/runpod-logo-purple.png", auth=False)
@@ -218,6 +227,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(data["triage_shadow_enabled"])
         self.assertNotIn("password", data)
 
+    def test_interactive_review_requires_all_safety_prerequisites(self):
+        env = {"P_OPS_ENABLED": "true", "P_OPS_REVIEW_USER": "colby",
+               "P_OPS_REVIEW_PASSWORD": "password", "P_OPS_CSRF_SECRET": "csrf",
+               "P_OPS_REVIEW_INTERACTIVE_ENABLED": "true",
+               "SLACK_SIGNING_SECRET": "secret", "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}
+        with self.assertRaisesRegex(ValueError, "REVIEW_POSTING"):
+            config(env)
+
     def test_daily_preview_runs_once_per_mountain_day(self):
         cfg = dict(self.cfg, daily_review=True)
         notion = FakeNotion()
@@ -261,6 +278,25 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(1, len(sender.rows))
         self.assertEqual("C-REVIEW", sender.rows[0]["channel"])
         self.assertIn("Review needed:", sender.rows[0]["content"])
+
+    def test_interactive_review_posts_only_the_first_question(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=True,
+                   review_interactive=True, review_user_ids={"U1"},
+                   public_url="https://p-ops.example")
+        event = {"event_id": "Ev3", "team_id": "T1", "channel": "C1", "ts": "789.123",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        sender, approvals = FakeReviewSender(), FakeApprovalClient()
+        clients = {"slack_capture": FakeCaptureClient(), "notion": FakeNotion(),
+                   "triage": FakeTriage(), "review_sender": sender,
+                   "approval_client": approvals}
+        results = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        self.assertTrue(any(row[0] == "approval_flow" and row[2] == "question_posted" for row in results))
+        self.assertEqual(1, len(approvals.steps))
+        flow, step = approvals.steps[0]
+        self.assertEqual("recommendation", step["step_key"])
+        self.assertEqual("171.001", flow["thread_ts"])
+        self.assertIn("p-ops.example/review#approvals", flow["links_json"])
 
 
 if __name__ == "__main__":

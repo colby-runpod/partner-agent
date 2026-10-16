@@ -2,7 +2,7 @@
 
 ## Current state
 
-The standalone runtime is implemented and locally tested. It has not been deployed or connected to the live Slack event URL. It does not alter the existing Runpod Slack chat service.
+The standalone runtime is implemented, locally tested, and deployed as a separate Railway service. Its dashboard and health endpoint are live. Slack capture, shadow triage, review posting, interactivity, and external write gates remain independently controlled, so deployment alone does not authorize them. It does not alter the existing Runpod Slack chat service.
 
 The structured triage engine and its 25-case evaluation harness are implemented. The runtime connection is read-only and remains disabled unless `P_OPS_TRIAGE_SHADOW_ENABLED=true`; every result is non-executable. Historical reconciliation currently contains 15 verified cases, one partial case, and two cases blocked because the connected Slack app cannot read the separate `runpod-team` workspace channels. These cases are useful calibration evidence but are not yet a release gate until the partial and blocked cases are resolved and a live model run passes.
 
@@ -14,6 +14,7 @@ The runtime provides:
 - Durable capture, Working Tasks proposal, message, Linear, and Notion update queues.
 - A daily Notion review preview that runs once per America/Denver calendar day when enabled.
 - Separate execution gates for Notion task creation, Notion updates, Linear creation, and outbound messages.
+- A sequential Slack review flow that records one allowlisted answer at a time without executing the underlying action.
 
 ## Safe deployment order
 
@@ -39,9 +40,24 @@ channel. This narrow gate does not enable general outbound messages and does
 not bypass `P_OPS_SEND_MESSAGES` for drafts or external communications.
 
 Review-card delivery is exactly-once. An uncertain Slack response moves the
-notification to review and is never retried automatically. Reactions and
-threaded replies are visible feedback only in this release; automated feedback
-ingestion remains disabled until Slack event routing is configured and tested.
+notification to review and is never retried automatically.
+
+To enable sequential Slack approvals, configure the Slack app interactivity URL
+as `https://YOUR-HOST/slack/interactions`. Keep the existing Events URL at
+`https://YOUR-HOST/slack/events`; subscribe to public and private channel
+message events so an allowlisted reply can provide context. The handshake
+capture also requires the `reaction_added` event and `reactions:read` scope.
+Then set:
+
+- `P_OPS_REVIEW_INTERACTIVE_ENABLED=true`
+- `P_OPS_REVIEW_USER_IDS` to the allowlisted Slack user IDs
+- `P_OPS_PUBLIC_URL` to the HTTPS service origin
+
+The agent posts one question at a time in the review-card thread. Approve,
+Decline, Add context, and Hold are persisted before the next question appears.
+Add context accepts one allowlisted human reply in that exact thread. These
+answers do not bypass Notion, Linear, access, or message-send gates. Exact
+message approval and send authorization remain separate decisions.
 
 ## Important boundaries
 

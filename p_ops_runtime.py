@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from zoneinfo import ZoneInfo
 
-from intake import Application, api
+from intake import Application, api, verify
 from p_ops_approval import ApprovalLedger, send_message
 from p_ops_capture import CaptureStore, SlackCaptureClient, accept_reaction, load_capture_config, resolve_capture
 from p_ops_inbox import InboxLedger, create_approved_task
@@ -28,6 +28,8 @@ from p_ops_shadow import ShadowLedger, run_shadow
 from p_ops_test_lab import (TestLabLedger, active_task_queue, bundle_from_notion_url,
                             bundle_from_text, evaluate_bundle, validate_corpus)
 from p_ops_triage import ClaudeTriageClient
+from p_ops_workflow import (ApprovalFlowLedger, SlackApprovalClient, accept_context_reply,
+                            process_flows, receive_interaction)
 
 
 REVIEW_STATES = ("needs_review", "approved", "send_authorized", "review", "conflict")
@@ -320,6 +322,10 @@ def config(env=None):
         "triage_shadow": env.get("P_OPS_TRIAGE_SHADOW_ENABLED") == "true",
         "review_posting": env.get("P_OPS_REVIEW_POSTING_ENABLED") == "true",
         "review_channel": env.get("P_OPS_REVIEW_CHANNEL_ID", ""),
+        "review_interactive": env.get("P_OPS_REVIEW_INTERACTIVE_ENABLED") == "true",
+        "review_user_ids": {value.strip() for value in env.get(
+            "P_OPS_REVIEW_USER_IDS", env.get("P_OPS_CAPTURE_USER_IDS", "")).split(",") if value.strip()},
+        "public_url": env.get("P_OPS_PUBLIC_URL", "").rstrip("/"),
     })
     if cfg["runtime_enabled"] and not all((cfg["review_user"], cfg["review_password"], cfg["csrf_secret"])):
         raise ValueError("Set P_OPS_REVIEW_USER, P_OPS_REVIEW_PASSWORD, and P_OPS_CSRF_SECRET.")
@@ -327,6 +333,12 @@ def config(env=None):
         raise ValueError("Set P_OPS_REVIEW_CHANNEL_ID before enabling review posting.")
     if cfg["review_posting"] and not env.get("SLACK_BOT_TOKEN"):
         raise ValueError("Set SLACK_BOT_TOKEN before enabling review posting.")
+    if cfg["review_interactive"] and not cfg["review_posting"]:
+        raise ValueError("Enable P_OPS_REVIEW_POSTING_ENABLED before interactive review.")
+    if cfg["review_interactive"] and not cfg["triage_shadow"]:
+        raise ValueError("Enable P_OPS_TRIAGE_SHADOW_ENABLED before interactive review.")
+    if cfg["review_interactive"] and not cfg["review_user_ids"]:
+        raise ValueError("Set P_OPS_REVIEW_USER_IDS before enabling interactive review.")
     return cfg
 
 
@@ -459,6 +471,7 @@ class Dashboard:
         self.cfg, self.capture, self.inbox = cfg, capture, inbox
         self.messages, self.linear, self.notion, self.triage = messages, linear, notion, triage
         self.test_lab = test_lab or TestLabLedger(cfg["db"])
+        self.approval_flows = ApprovalFlowLedger(cfg["db"])
 
     def test_lab_content(self, task_pages=None, queue_error=""):
         corpus = validate_corpus(Path(__file__).with_name("evals") / "p_ops_triage_cases.jsonl")
@@ -669,6 +682,7 @@ class Dashboard:
         linear_rows = self.linear.rows(REVIEW_STATES)
         notion_rows = self.notion.rows(REVIEW_STATES)
         triage_rows = self.triage.rows(("shadow", "error"))
+        flow_rows = self.approval_flows.rows()
 
         sections = []
         activity = []
@@ -750,6 +764,22 @@ class Dashboard:
         sections.append(_section("shadow-triage", "Shadow triage",
                                  "Read-only decisions used to calibrate the agent before automation.", cards))
 
+        cards = []
+        for row in reversed(flow_rows[-50:]):
+            steps = self.approval_flows.steps(row["id"])
+            completed = sum(1 for step in steps if step["state"] in {"approved", "revised"})
+            current = next((step for step in steps if step["state"] in {"pending", "awaiting_context"}), None)
+            body = "%d of %d decisions recorded." % (completed, len(steps))
+            if current:
+                body += "\n\nCurrent question: " + current["prompt"] + "\n" + current["context"]
+            links = json.loads(row.get("links_json") or "[]")
+            if links:
+                body += "\n\nLinks: " + " · ".join(item["label"] + ": " + item["url"] for item in links)
+            cards.append(_card(row["title"], row["state"], body, kind="Slack approval flow"))
+            activity.append((row["title"], row["state"], "Slack approval flow"))
+        sections.append(_section("approvals", "Approvals",
+                                 "Sequential Slack decisions, context, and completion state.", cards))
+
         groups = [
             ("captures", "Captures", len(captures)),
             ("task-proposals", "Task proposals", len(inbox_rows)),
@@ -757,8 +787,9 @@ class Dashboard:
             ("linear", "Linear", len(linear_rows)),
             ("task-updates", "Task updates", len(notion_rows)),
             ("shadow-triage", "Shadow triage", len(triage_rows)),
+            ("approvals", "Approvals", len(flow_rows)),
         ]
-        all_rows = captures + inbox_rows + message_rows + linear_rows + notion_rows + triage_rows
+        all_rows = captures + inbox_rows + message_rows + linear_rows + notion_rows + triage_rows + flow_rows
         needs_review = sum(1 for row in all_rows if row["state"] in ("needs_review", "review", "conflict"))
         approved = sum(1 for row in all_rows if row["state"] in ("approved", "send_authorized"))
         metrics = "".join(
@@ -770,6 +801,7 @@ class Dashboard:
             ("Linear writes", os.environ.get("P_OPS_LINEAR_WRITE") == "true"),
             ("Message sending", os.environ.get("P_OPS_SEND_MESSAGES") == "true"),
             ("Slack review posts", bool(self.cfg.get("review_posting"))),
+            ("Slack approvals", bool(self.cfg.get("review_interactive"))),
         )
         gate_html = "".join("<span class='gate'>%s: %s</span>" %
                             (html.escape(label), "on" if enabled else "off") for label, enabled in gates)
@@ -784,6 +816,7 @@ class Dashboard:
                     ("Daily task review", "Runs the Working Tasks preview once per Mountain Time day.", bool(self.cfg.get("daily_review"))),
                     ("Shadow triage", "Evaluates captured work without making external changes.", bool(self.cfg.get("triage_shadow"))),
                     ("Slack review posts", "Posts review requests only to the approved internal channel.", bool(self.cfg.get("review_posting"))),
+                    ("Slack approvals", "Runs one persisted approval question at a time in the review thread.", bool(self.cfg.get("review_interactive"))),
                     ("Slack capture", "Accepts the configured handshake reaction as a capture signal.", bool(self.cfg.get("enabled"))),
                 ))
             write_rows = "".join(
@@ -841,7 +874,7 @@ class Dashboard:
         queue_nav = "".join(
             "<a href='/review#%s'><span class='nav-copy'>%s<span>%s</span></span><span class='nav-count'>%d</span></a>" %
             (section_id, _icon(icon), html.escape(label), count)
-            for (section_id, label, count), icon in zip(groups, ("capture", "tasks", "message", "linear", "tasks", "triage")))
+            for (section_id, label, count), icon in zip(groups, ("capture", "tasks", "message", "linear", "tasks", "triage", "tasks")))
         page_nav = (
             "<a class='%s' href='/review'><span class='nav-copy'>%s<span>Dashboard</span></span></a>"
             "<a class='%s' href='/activity'><span class='nav-copy'>%s<span>Activity</span></span></a>"
@@ -908,6 +941,36 @@ class RuntimeApp:
     def __init__(self, cfg, dashboard, slack_app, triage_client=None, notion_client=None):
         self.cfg, self.dashboard, self.slack_app = cfg, dashboard, slack_app
         self.triage_client, self.notion_client = triage_client, notion_client
+        self.approval_flows = ApprovalFlowLedger(cfg["db"])
+
+    def slack_events(self, env, start):
+        def respond(code, value):
+            data = json.dumps(value).encode()
+            start(code, [("Content-Type", "application/json"), ("Content-Length", str(len(data)))])
+            return [data]
+        try:
+            size = int(env.get("CONTENT_LENGTH") or 0)
+            if size <= 0 or size > 262144:
+                return respond("413 Payload Too Large", {})
+            raw = env["wsgi.input"].read(size)
+            if not verify(self.cfg["secret"], env.get("HTTP_X_SLACK_REQUEST_TIMESTAMP"),
+                          env.get("HTTP_X_SLACK_SIGNATURE"), raw):
+                return respond("401 Unauthorized", {})
+            body = json.loads(raw)
+            if body.get("type") == "url_verification":
+                return respond("200 OK", {"challenge": body.get("challenge", "")})
+            if body.get("type") == "event_callback":
+                capture = accept_reaction(body, self.cfg)
+                if capture:
+                    self.dashboard.capture.enqueue(capture)
+                context = accept_context_reply(body, self.cfg, self.approval_flows)
+                if context:
+                    self.approval_flows.enqueue(context)
+            return respond("200 OK", {"ok": True})
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return respond("400 Bad Request", {})
+        except sqlite3.Error:
+            return respond("503 Service Unavailable", {"error": "queue_unavailable"})
 
     @staticmethod
     def _form(env, maximum=65536):
@@ -976,11 +1039,14 @@ class RuntimeApp:
                                                   "capture_enabled": self.cfg["enabled"],
                                                   "triage_shadow_enabled": self.cfg.get("triage_shadow", False),
                                                   "review_posting_enabled": self.cfg.get("review_posting", False),
+                                                  "review_interactive_enabled": self.cfg.get("review_interactive", False),
                                                   "review_channel_configured": bool(self.cfg.get("review_channel"))}))
         if not self.cfg["runtime_enabled"]:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
-            return self.slack_app(env, start)
+            return self.slack_events(env, start)
+        if path == "/slack/interactions" and method == "POST":
+            return receive_interaction(env, start, self.cfg, self.approval_flows)
         if path not in {"/review", "/review/action", "/activity", "/settings", "/test-lab", "/test-lab/action"}:
             return respond("404 Not Found", "{}")
         if not _basic_authorized(env, self.cfg):
@@ -1064,12 +1130,23 @@ def run_once(cfg, stores, clients=None, today=None):
             row = triage_ledger.get(item_id)
             guarded = json.loads(row["decision_json"])
             if guarded.get("review_required") and cfg.get("review_channel"):
-                notifications.queue(row, cfg.get("review_channel", ""))
+                notifications.queue(row, cfg.get("review_channel", ""), cfg.get("public_url", ""))
         if cfg.get("review_posting"):
             sender = clients.get("review_sender") or SlackReviewSender(cfg["review_channel"])
             for row in notifications.rows(("queued",)):
                 results.append(("review_notification", row["triage_id"],
                                 notifications.publish(row["triage_id"], cfg["review_channel"], sender)))
+        if cfg.get("review_interactive"):
+            flows = ApprovalFlowLedger(cfg["db"])
+            for notice in notifications.rows(("sent",)):
+                try:
+                    shadow_row = triage_ledger.get(notice["triage_id"])
+                except KeyError:
+                    continue
+                flows.create(shadow_row, cfg["review_channel"], notice["external_id"], cfg.get("public_url", ""))
+            approval_client = clients.get("approval_client") or SlackApprovalClient(cfg["review_channel"])
+            results.extend(("approval_flow", flow_id, state)
+                           for flow_id, state in process_flows(flows, approval_client))
     if os.environ.get("P_OPS_NOTION_CREATE") == "true":
         client = clients.get("notion") or NotionClient()
         for row in inbox.rows(("approved",)):
