@@ -2,8 +2,9 @@ import unittest
 
 from p_ops_notion import RemoteError
 import datetime as dt
+import tempfile
 
-from p_ops_test_lab import active_task_queue, bundle_from_notion_url, notion_page_id
+from p_ops_test_lab import TestLabLedger, active_task_queue, bundle_from_notion_url, notion_page_id
 
 
 def page(item_id, title, status, due="", next_date=""):
@@ -28,6 +29,17 @@ class InaccessibleNotionClient:
 
 
 class TestLabUrlTests(unittest.TestCase):
+    def test_test_run_keeps_context_while_moving_through_stages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = TestLabLedger(directory + "/test.sqlite3")
+            bundle = {"source": {"id": "task-1", "text": "Original task context"}}
+            run_id = ledger.start("notion", "Task one", bundle)
+            self.assertEqual("evaluating", ledger.rows()[0]["state"])
+            ledger.finish(run_id, {"decision": {"disposition": "merge_task"}})
+            row = ledger.rows()[0]
+            self.assertEqual("completed", row["state"])
+            self.assertIn("Original task context", row["input_json"])
+
     def test_active_task_queue_prioritizes_unreviewed_overdue_work(self):
         pages = [
             page("reviewed", "Reviewed task", "In Progress", due="2026-10-10"),

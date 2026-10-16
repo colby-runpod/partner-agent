@@ -160,6 +160,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(b"Confirm onboarding owners", body)
         self.assertIn(b"Search tasks, owners, next steps", body)
         self.assertIn(b">Evaluate</button>", body)
+        self.assertIn(b"task-evaluation-form", body)
+        self.assertIn(b"View full task context", body)
+        self.assertIn(b"Persistent history", body)
+        self.assertIn(b"data-run-filter='evaluating'", body)
         self.assertEqual(1, notion.reads)
 
     def test_test_lab_evaluates_text_and_saves_operator_feedback(self):
@@ -180,6 +184,11 @@ class RuntimeTests(unittest.TestCase):
         saved = self.dashboard.test_lab.rows()[0]
         self.assertEqual("too_aggressive", saved["feedback"])
         self.assertEqual("Wait for the scheduled call.", saved["feedback_note"])
+        status, _, body = request(app, "/test-lab")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"data-run-stage='needs-correction'", body)
+        self.assertIn(b"Open evaluation", body)
+        self.assertIn(b"Prepare the next step from the partner call.", body)
 
     def test_csrf_protected_review_action(self):
         message_id = self.stores[2].create("slack", "C1", "Ready to send")

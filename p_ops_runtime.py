@@ -36,7 +36,7 @@ REVIEW_STATES = ("needs_review", "approved", "send_authorized", "review", "confl
 DASHBOARD_CSS = r"""
 :root {
   color-scheme: light;
-  --bg: #f5f6fa;
+  --bg: #f4f6fa;
   --surface: #ffffff;
   --surface-soft: #fafaff;
   --border: #e2e4eb;
@@ -65,16 +65,16 @@ html { scroll-behavior: smooth; }
 body { margin: 0; color: var(--text); background: var(--bg); }
 button, input, textarea, select { font: inherit; }
 a { color: inherit; }
-.shell { width: 100%; min-height: 100vh; overflow-x: hidden; display: grid; grid-template-columns: 244px minmax(0, 1fr); }
+.shell { width: 100%; min-height: 100vh; overflow-x: hidden; display: grid; grid-template-columns: 196px minmax(0, 1fr); }
 .sidebar {
-  min-width: 0; position: sticky; top: 0; height: 100vh; padding: 24px 16px 18px;
+  min-width: 0; position: sticky; top: 0; height: 100vh; padding: 17px 10px 14px;
   background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column;
 }
-.brand { display: flex; align-items: center; height: 34px; padding: 0 8px; margin-bottom: 34px; }
-.brand img { width: 132px; height: auto; display: block; }
+.brand { display: flex; align-items: center; height: 30px; padding: 0 5px; margin-bottom: 25px; }
+.brand img { width: 101px; height: auto; display: block; }
 .nav-label { margin: 0 10px 8px; color: var(--subtle); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .nav { display: grid; gap: 4px; }
-.nav a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border-radius: 8px; text-decoration: none; color: #34343b; font-size: 14px; }
+.nav a { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 8px; border-radius: 6px; text-decoration: none; color: #34343b; font-size: 13px; }
 .nav a .nav-copy { display: flex; align-items: center; gap: 9px; }
 .nav svg { width: 17px; height: 17px; stroke-width: 2; color: #666873; }
 .nav a:hover { background: #f1f1f5; }
@@ -86,7 +86,7 @@ a { color: inherit; }
 .side-footer span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #21a273; box-shadow: 0 0 0 3px #e3f6ef; }
 .main { min-width: 0; }
-.topbar { min-height: 66px; padding: 0 38px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.topbar { min-height: 55px; padding: 0 24px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.96); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .topbar-title { font-size: 14px; font-weight: 650; }
 .topbar-actions, .topbar-meta { display: flex; align-items: center; gap: 9px; }
 .command-trigger { width: min(360px, 34vw); height: 36px; min-height: 36px; padding: 0 9px 0 12px; border-color: var(--border); background: #f7f7f9; color: var(--muted); display: flex; align-items: center; gap: 8px; text-align: left; font-weight: 450; }
@@ -109,10 +109,10 @@ a { color: inherit; }
 .notification-item span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 .environment { padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); background: var(--surface); font-size: 12px; }
 .avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--purple); color: white; font-size: 11px; font-weight: 750; }
-.content { width: min(1240px, 100%); margin: 0 auto; padding: 42px 38px 72px; }
+.content { width: min(1440px, 100%); margin: 0 auto; padding: 28px 30px 64px; }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 27px; }
 .eyebrow { margin: 0 0 8px; color: var(--purple); font-size: 11px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
-h1 { margin: 0; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; letter-spacing: -.035em; font-weight: 650; }
+h1 { margin: 0; font-size: clamp(27px, 3vw, 34px); line-height: 1.12; letter-spacing: -.035em; font-weight: 650; }
 .lede { max-width: 720px; margin: 12px 0 0; color: var(--muted); font-size: 15px; }
 .mode-pill { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid #dcd5ff; border-radius: 999px; color: var(--purple-dark); background: var(--purple-soft); font-size: 12px; font-weight: 650; }
 .mode-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--purple); }
@@ -131,19 +131,26 @@ h1 { margin: 0; font-size: clamp(30px, 4vw, 42px); line-height: 1.12; letter-spa
 .section-heading h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; font-weight: 650; }
 .section-heading p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .section-count { color: var(--subtle); font-size: 12px; }
-.queue-list { display: grid; gap: 12px; }
-.review-card { overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow); }
-.card-main { padding: 19px 20px 18px; }
+.queue-list { display: grid; gap: 7px; }
+.review-card { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 1px 1px rgba(20,20,32,.025); }
+.card-main { padding: 13px 15px; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-title { min-width: 0; }
-.card-title h3 { margin: 0; font-size: 15px; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
+.card-title h3 { margin: 0; font-size: 13px; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
 .card-kind { margin: 0 0 5px; color: var(--subtle); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .state { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; background: #f0f1f4; color: #5d5f68; font-size: 10px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; }
 .state-needs-review, .state-review, .state-conflict { background: var(--amber-soft); color: var(--amber); }
 .state-approved, .state-send-authorized, .state-captured { background: var(--green-soft); color: var(--green); }
 .state-shadow, .state-resolving { background: var(--blue-soft); color: var(--blue); }
 .state-error, .state-failed { background: var(--red-soft); color: var(--red); }
-.card-body { margin: 14px 0 0; color: #484a54; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.55; }
+.card-preview { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.card-details { margin-top: 9px; border-top: 1px solid transparent; }
+.card-details[open] { padding-top: 10px; border-top-color: var(--border); }
+.card-details summary { width: fit-content; color: var(--purple); cursor: pointer; font-size: 11px; font-weight: 650; list-style: none; }
+.card-details summary::-webkit-details-marker { display: none; }
+.card-details summary::after { content: " +"; }
+.card-details[open] summary::after { content: " -"; }
+.card-body { margin: 11px 0 0; color: #484a54; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.55; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--border); }
 .actions form { display: inline; margin: 0; }
 button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--purple); border-radius: 7px; background: var(--purple); color: white; cursor: pointer; font-size: 12px; font-weight: 650; }
@@ -223,11 +230,26 @@ button.secondary:hover { border-color: #b9bbc5; background: #f6f6f8; }
 .task-meta .overdue { background: var(--red-soft); color: var(--red); font-weight: 650; }
 .task-meta .reviewed-badge { background: var(--green-soft); color: var(--green); }
 .task-next { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.task-detail { margin-top: 8px; }
+.task-detail summary { color: var(--purple); cursor: pointer; font-size: 10px; font-weight: 650; list-style: none; }
+.task-detail summary::-webkit-details-marker { display: none; }
+.task-detail summary::after { content: " +"; }
+.task-detail[open] summary::after { content: " -"; }
 .task-queue-actions { min-width: 96px; text-align: right; }
 .task-queue-actions form { margin: 0; }
 .task-queue-actions button { width: 100%; }
 .task-queue-empty { display: none; margin-top: 8px; }
 .task-queue-empty.visible { display: grid; }
+.run-stage-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 12px; }
+.stage-filter { min-height: 29px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: white; color: var(--muted); font-size: 10px; }
+.stage-filter.active, .stage-filter:hover { border-color: #cfc5ff; background: var(--purple-soft); color: var(--purple-dark); }
+.test-run-card[hidden] { display: none; }
+.runpod-spinner { width: 30px; height: 30px; object-fit: contain; border-radius: 8px; animation: runpod-spin 1.25s cubic-bezier(.5,.1,.5,.9) infinite; }
+.evaluating-card { border-color: #dcd3ff; background: linear-gradient(90deg,#fff 0%,#faf8ff 100%); }
+.evaluating-main { display: flex; align-items: center; gap: 12px; }
+.evaluating-copy strong { display: block; font-size: 12px; }
+.evaluating-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+@keyframes runpod-spin { to { transform: rotate(360deg); } }
 .modal-open { overflow: hidden; }
 .command-overlay { position: fixed; z-index: 50; inset: 0; padding: 10vh 18px 18px; background: rgba(24,22,31,.44); backdrop-filter: blur(2px); }
 .command-overlay[hidden] { display: none; }
@@ -389,12 +411,16 @@ def _button(cfg, kind, action, item_id, label):
 def _card(title, state, body, buttons="", kind="Work item"):
     state_class = "".join(character if character.isalnum() else "-" for character in state.lower()).strip("-")
     actions = "<div class='actions'>%s</div>" % buttons if buttons else ""
+    preview = " ".join(str(body or "").split())
+    if len(preview) > 180:
+        preview = preview[:177].rsplit(" ", 1)[0] + "..."
     return ("<article class='review-card'><div class='card-main'><div class='card-head'>"
             "<div class='card-title'><p class='card-kind'>%s</p><h3>%s</h3></div>"
-            "<span class='state state-%s'>%s</span></div><div class='card-body'>%s</div>%s"
-            "</div></article>" % (
+            "<span class='state state-%s'>%s</span></div><p class='card-preview'>%s</p>"
+            "<details class='card-details'><summary>View details</summary><div class='card-body'>%s</div>%s"
+            "</details></div></article>" % (
                 html.escape(kind), html.escape(title), html.escape(state_class, quote=True),
-                html.escape(state.replace("_", " ")), html.escape(body), actions))
+                html.escape(state.replace("_", " ")), html.escape(preview), html.escape(body), actions))
 
 
 def _empty(title, detail):
@@ -460,19 +486,27 @@ class Dashboard:
             if item["evaluated"]:
                 meta_html += "<span class='reviewed-badge'>Reviewed</span>"
             query = " ".join((item["title"], item["status"], item["owner"], item["work_mode"], item["next_step"]))
+            next_preview = " ".join(item["next_step"].split())
+            if len(next_preview) > 145:
+                next_preview = next_preview[:142].rsplit(" ", 1)[0] + "..."
+            detail_html = ""
+            if item["next_step"]:
+                detail_html = ("<p class='task-next'><strong>Next:</strong> %s</p>"
+                               "<details class='task-detail'><summary>View full task context</summary>"
+                               "<p class='task-next'>%s</p></details>" %
+                               (html.escape(next_preview), html.escape(item["next_step"])))
             queue_rows.append(
                 "<article class='task-queue-item %s' data-task-queue-item data-status='%s' data-query='%s'>"
                 "<div class='task-queue-main'><div class='task-title-row'><a href='%s' target='_blank' rel='noopener'>%s</a>"
                 "</div><div class='task-meta'>%s</div>%s</div><div class='task-queue-actions'>"
-                "<form class='lab-form' method='post' action='/test-lab/action'>"
+                "<form class='lab-form task-evaluation-form' data-evaluation-title='%s' method='post' action='/test-lab/action'>"
                 "<input type='hidden' name='action' value='evaluate_notion'>"
                 "<input type='hidden' name='csrf' value='%s'><input type='hidden' name='task_url' value='%s'>"
                 "<button %s>%s</button></form></div></article>" %
                 ("reviewed" if item["evaluated"] else "", html.escape(item["status"], quote=True),
                  html.escape(query.lower(), quote=True), html.escape(item["url"], quote=True),
-                 html.escape(item["title"]), meta_html,
-                 "<p class='task-next'>%s</p>" % html.escape(item["next_step"]) if item["next_step"] else "",
-                 html.escape(new_tokens["evaluate_notion"], quote=True), html.escape(item["url"], quote=True),
+                 html.escape(item["title"]), meta_html, detail_html,
+                 html.escape(item["title"], quote=True), html.escape(new_tokens["evaluate_notion"], quote=True), html.escape(item["url"], quote=True),
                  "" if notion_ready and model_ready else "disabled",
                  "Re-evaluate" if item["evaluated"] else "Evaluate"))
         status_filter = "".join("<option value='%s'>%s</option>" %
@@ -506,7 +540,7 @@ class Dashboard:
                                            html.escape(new_tokens["validate"], quote=True)))
         notion_form = ("<section class='lab-panel'><h2>Evaluate by URL</h2>"
                        "<p>Use this fallback for a task that does not appear in the active queue.</p>"
-                       "<form class='lab-form' method='post' action='/test-lab/action'>"
+                       "<form class='lab-form task-evaluation-form' data-evaluation-title='Working Task evaluation' method='post' action='/test-lab/action'>"
                        "<input type='hidden' name='action' value='evaluate_notion'>"
                        "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='task_url'>Notion task URL</label>"
                        "<input id='task_url' name='task_url' type='url' required placeholder='https://app.notion.com/p/runpod/...'></div>"
@@ -517,7 +551,7 @@ class Dashboard:
                         "" if notion_ready and model_ready else "disabled"))
         text_form = ("<section class='lab-panel'><h2>Evaluate pasted context</h2>"
                      "<p>Use this for Slack, email, meeting, or hypothetical work that is not yet a Working Task.</p>"
-                     "<form class='lab-form' method='post' action='/test-lab/action'>"
+                     "<form class='lab-form task-evaluation-form' data-evaluation-title='Pasted context evaluation' method='post' action='/test-lab/action'>"
                      "<input type='hidden' name='action' value='evaluate_text'>"
                      "<input type='hidden' name='csrf' value='%s'><div class='field'><label for='test_title'>Task or signal</label>"
                      "<input id='test_title' name='title' maxlength='240' required placeholder='What needs to be evaluated?'></div>"
@@ -529,50 +563,96 @@ class Dashboard:
                       "ready" if model_ready else "not configured", "" if model_ready else "disabled"))
 
         result_cards = []
+        stage_counts = {"baseline": 0, "evaluating": 0, "ready-review": 0, "approved": 0,
+                        "needs-correction": 0, "error": 0}
         feedback_labels = (("approved", "Approve"), ("too_aggressive", "Too aggressive"),
                            ("too_cautious", "Too cautious"), ("missing_context", "Missing context"),
                            ("wrong_disposition", "Wrong disposition"))
         for row in self.test_lab.rows():
             result = json.loads(row["result_json"]) if row.get("result_json") else None
+            try:
+                run_input = json.loads(row.get("input_json") or "{}")
+            except (TypeError, ValueError):
+                run_input = {}
+            source_context = run_input.get("source", {}).get("text") or run_input.get("submitted") or ""
             if row["kind"] == "corpus":
+                stage_counts["baseline"] += 1
                 body = ("Corpus validation passed.\n\nCases: %d · Historical: %d · Policy edges: %d" %
                         (result["cases"], result["historical"], result["policy_edge"])) if result else (row.get("error") or "Validation failed.")
-                result_cards.append(_card(row["label"], row["state"], body, kind="Baseline validation"))
+                baseline_card = _card(row["label"], row["state"], body, kind="Baseline validation")
+                result_cards.append(baseline_card.replace(
+                    "class='review-card'", "class='review-card test-run-card' data-run-stage='baseline'", 1))
+                continue
+            if row["state"] == "evaluating":
+                stage_counts["evaluating"] += 1
+                result_cards.append(
+                    "<article class='review-card test-run-card evaluating-card' id='%s' data-run-stage='evaluating'>"
+                    "<div class='card-main evaluating-main'><img class='runpod-spinner' src='/assets/runpod-icon.png' alt=''>"
+                    "<div class='evaluating-copy'><strong>%s</strong><span>Reading context and evaluating the next best action...</span>"
+                    "</div><span class='state state-shadow'>evaluating</span></div></article>" %
+                    (html.escape(row["id"], quote=True), html.escape(row["label"])))
                 continue
             if result:
                 decision = result["decision"]
+                if row.get("feedback") == "approved":
+                    stage = "approved"
+                elif row.get("feedback"):
+                    stage = "needs-correction"
+                else:
+                    stage = "ready-review"
+                stage_counts[stage] += 1
                 facts = (("Disposition", decision["disposition"]), ("Work mode", decision["work_mode"]),
                          ("Priority", decision["priority"]), ("Confidence", "%d%%" % round(decision["confidence"] * 100)))
                 fact_html = "".join("<div class='decision-fact'><span>%s</span><strong>%s</strong></div>" %
                                     (html.escape(label), html.escape(str(value))) for label, value in facts)
-                body = ("<div class='card-body'>%s</div><div class='decision-grid'>%s</div>"
-                        "<div class='card-body'><strong>Next step</strong>\n%s\n\n<strong>Definition of done</strong>\n%s"
-                        "\n\n<strong>Why</strong>\n%s\n\n<strong>Review</strong>\n%s\n\n<strong>Missing evidence</strong>\n%s</div>" %
-                        (html.escape(decision["summary"]), fact_html, html.escape(decision["next_step"]),
+                detail = ("<div class='card-body'><strong>Next step</strong>\n%s\n\n<strong>Definition of done</strong>\n%s"
+                          "\n\n<strong>Why</strong>\n%s\n\n<strong>Review</strong>\n%s\n\n<strong>Missing evidence</strong>\n%s"
+                          "\n\n<strong>Evaluated context</strong>\n%s</div>" %
+                        (html.escape(decision["next_step"]),
                          html.escape(decision["definition_of_done"]), html.escape(decision["rationale"]),
                          "Required - " + html.escape(", ".join(result["policy_reasons"])) if result["review_required"] else "Not required",
-                         html.escape(", ".join(decision["missing_evidence"]) or "None")))
+                         html.escape(", ".join(decision["missing_evidence"]) or "None"),
+                         html.escape(source_context or "Context not available.")))
                 if row.get("feedback"):
-                    body += "<span class='feedback-saved'>Feedback saved: %s</span>" % html.escape(row["feedback"].replace("_", " "))
+                    detail += "<span class='feedback-saved'>Feedback saved: %s</span>" % html.escape(row["feedback"].replace("_", " "))
                 options = "".join("<option value='%s'>%s</option>" % (value, label) for value, label in feedback_labels)
                 feedback_token = _csrf(self.cfg, "test_lab", "feedback", row["id"])
-                body += ("<form class='feedback-form' method='post' action='/test-lab/action'>"
+                detail += ("<form class='feedback-form' method='post' action='/test-lab/action'>"
                          "<input type='hidden' name='action' value='feedback'><input type='hidden' name='id' value='%s'>"
                          "<input type='hidden' name='csrf' value='%s'><div class='field'><label>Your assessment</label>"
                          "<select name='feedback'>%s</select></div><div class='field'><label>One correction, if needed</label>"
                          "<input name='note' maxlength='2000' placeholder='What should it understand or do differently?'></div>"
                          "<button>Save feedback</button></form>" %
                          (html.escape(row["id"], quote=True), html.escape(feedback_token, quote=True), options))
-                result_cards.append("<article class='review-card' id='%s'><div class='card-main'><div class='card-head'>"
+                result_cards.append("<article class='review-card test-run-card' id='%s' data-run-stage='%s'><div class='card-main'><div class='card-head'>"
                                     "<div class='card-title'><p class='card-kind'>Read-only test</p><h3>%s</h3></div>"
-                                    "<span class='state state-shadow'>evaluated</span></div>%s</div></article>" %
-                                    (html.escape(row["id"], quote=True), html.escape(row["label"]), body))
+                                    "<span class='state state-%s'>%s</span></div><p class='card-preview'>%s</p>"
+                                    "<div class='decision-grid'>%s</div><details class='card-details'><summary>Open evaluation</summary>%s"
+                                    "</details></div></article>" %
+                                    (html.escape(row["id"], quote=True), html.escape(stage, quote=True),
+                                     html.escape(row["label"]), "approved" if stage == "approved" else "shadow",
+                                     html.escape(stage.replace("-", " ")), html.escape(decision["summary"]),
+                                     fact_html, detail))
             else:
-                result_cards.append(_card(row["label"], "error", row.get("error") or "Evaluation failed.", kind="Read-only test"))
+                stage_counts["error"] += 1
+                error_card = _card(row["label"], "error", (row.get("error") or "Evaluation failed.") +
+                                   ("\n\nContext\n" + source_context if source_context else ""), kind="Read-only test")
+                result_cards.append(error_card.replace("class='review-card'", "class='review-card test-run-card' data-run-stage='error'", 1))
+        stage_buttons = "".join(
+            "<button class='stage-filter %s' type='button' data-run-filter='%s'>%s <span>%d</span></button>" %
+            ("active" if key == "all" else "", html.escape(key, quote=True), html.escape(label), count)
+            for key, label, count in (
+                ("all", "All", len(result_cards)), ("evaluating", "Evaluating", stage_counts["evaluating"]),
+                ("ready-review", "Ready for review", stage_counts["ready-review"]),
+                ("approved", "Approved", stage_counts["approved"]),
+                ("needs-correction", "Needs correction", stage_counts["needs-correction"]),
+                ("error", "Errors", stage_counts["error"]), ("baseline", "Baseline", stage_counts["baseline"]),
+            ))
         history = ("<section class='queue-section'><div class='section-heading'><div><h2>Recent test runs</h2>"
-                   "<p>Review the decision, then approve it or give one correction.</p></div><span class='section-count'>%d runs</span>"
-                   "</div><div class='lab-results'>%s</div></section>" %
-                   (len(result_cards), "".join(result_cards) if result_cards else _empty(
+                   "<p>Persistent history with the original context, decision, and your feedback.</p></div><span class='section-count'>%d saved runs</span>"
+                   "</div><div class='run-stage-bar'>%s</div><div class='lab-results' data-run-list>%s</div>"
+                   "<div class='empty task-queue-empty' data-run-empty><div><strong>No runs in this stage</strong>Choose another stage.</div></div></section>" %
+                   (len(result_cards), stage_buttons, "".join(result_cards) if result_cards else _empty(
                        "No test runs yet", "Evaluate a Working Task or pasted context to begin calibration.")))
         return ("<div class='hero'><div><p class='eyebrow'>Calibration</p><h1>Test Lab</h1>"
                 "<p class='lede'>See exactly how p-OPS understands work, why it chooses a disposition, and what it would do next.</p>"
@@ -850,6 +930,7 @@ class RuntimeApp:
             ledger.feedback(item_id, form.get("feedback", ""), form.get("note", ""))
             return item_id
         triage_client = self.triage_client or ClaudeTriageClient()
+        run_id = None
         try:
             if action == "evaluate_text":
                 bundle = bundle_from_text(form.get("title"), form.get("context"))
@@ -860,10 +941,13 @@ class RuntimeApp:
                 label, kind = bundle["source"]["text"].splitlines()[0], "notion"
             else:
                 raise ValueError("Unsupported test action.")
-            return ledger.record(kind, label, bundle, evaluate_bundle(bundle, triage_client))
+            run_id = ledger.start(kind, label, bundle)
+            return ledger.finish(run_id, evaluate_bundle(bundle, triage_client))
         except Exception as exc:
             label = (form.get("title") or form.get("task_url") or "Test evaluation").strip()[:240]
             safe_error = type(exc).__name__ + ": " + str(exc)[:500]
+            if run_id:
+                return ledger.finish(run_id, error=safe_error)
             return ledger.record("notion" if action == "evaluate_notion" else "text", label,
                                  {"submitted": label}, error=safe_error)
 

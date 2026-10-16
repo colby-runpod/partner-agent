@@ -10,6 +10,8 @@
   const taskQueueSearch = document.querySelector("[data-task-queue-search]");
   const taskStatusFilter = document.querySelector("[data-task-status-filter]");
   const taskQueueItems = Array.from(document.querySelectorAll("[data-task-queue-item]"));
+  const runFilters = Array.from(document.querySelectorAll("[data-run-filter]"));
+  const runCards = Array.from(document.querySelectorAll("[data-run-stage]"));
 
   function openPalette() {
     if (!palette) return;
@@ -58,10 +60,60 @@
     if (empty) empty.classList.toggle("visible", visible === 0);
   }
 
+  function filterRuns(stage) {
+    let visible = 0;
+    document.querySelectorAll("[data-run-stage]").forEach(function (card) {
+      card.hidden = stage !== "all" && card.dataset.runStage !== stage;
+      if (!card.hidden) visible += 1;
+    });
+    runFilters.forEach(function (button) {
+      button.classList.toggle("active", button.dataset.runFilter === stage);
+    });
+    const empty = document.querySelector("[data-run-empty]");
+    if (empty) empty.classList.toggle("visible", visible === 0);
+  }
+
+  function showEvaluatingCard(form) {
+    const list = document.querySelector("[data-run-list]");
+    if (!list) return;
+    let title = form.dataset.evaluationTitle || "Task evaluation";
+    const enteredTitle = form.querySelector("input[name='title']");
+    if (enteredTitle && enteredTitle.value.trim()) title = enteredTitle.value.trim();
+    const article = document.createElement("article");
+    article.className = "review-card test-run-card evaluating-card";
+    article.dataset.runStage = "evaluating";
+    const main = document.createElement("div");
+    main.className = "card-main evaluating-main";
+    const logo = document.createElement("img");
+    logo.className = "runpod-spinner";
+    logo.src = "/assets/runpod-icon.png";
+    logo.alt = "";
+    const copy = document.createElement("div");
+    copy.className = "evaluating-copy";
+    const strong = document.createElement("strong");
+    strong.textContent = title;
+    const status = document.createElement("span");
+    status.textContent = "Reading context and evaluating the next best action...";
+    copy.append(strong, status);
+    const badge = document.createElement("span");
+    badge.className = "state state-shadow";
+    badge.textContent = "evaluating";
+    main.append(logo, copy, badge);
+    article.append(main);
+    list.prepend(article);
+    const sourceRow = form.closest("[data-task-queue-item]");
+    if (sourceRow) sourceRow.remove();
+    filterRuns("all");
+    article.scrollIntoView({behavior: "smooth", block: "center"});
+  }
+
   if (commandButton) commandButton.addEventListener("click", openPalette);
   if (commandInput) commandInput.addEventListener("input", filterCommands);
   if (taskQueueSearch) taskQueueSearch.addEventListener("input", filterTaskQueue);
   if (taskStatusFilter) taskStatusFilter.addEventListener("change", filterTaskQueue);
+  runFilters.forEach(function (button) {
+    button.addEventListener("click", function () { filterRuns(button.dataset.runFilter); });
+  });
   if (palette) {
     palette.addEventListener("click", function (event) {
       if (event.target === palette || event.target.closest("[data-close-command]")) closePalette();
@@ -84,6 +136,7 @@
         return;
       }
       form.dataset.submitted = "true";
+      if (form.classList.contains("task-evaluation-form")) showEvaluatingCard(form);
       const button = form.querySelector("button[type='submit'], button:not([type])");
       if (button) {
         button.disabled = true;
