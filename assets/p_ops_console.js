@@ -58,6 +58,21 @@
     notificationPanel.addEventListener("click", function (event) { event.stopPropagation(); });
     document.addEventListener("click", closeNotifications);
   }
+  document.querySelectorAll("form.lab-form").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (form.dataset.submitted === "true") {
+        event.preventDefault();
+        return;
+      }
+      form.dataset.submitted = "true";
+      const button = form.querySelector("button[type='submit'], button:not([type])");
+      if (button) {
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        button.textContent = "Evaluating...";
+      }
+    });
+  });
   document.addEventListener("keydown", function (event) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
