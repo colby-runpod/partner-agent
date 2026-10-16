@@ -125,6 +125,38 @@ Setup:
    `NOTION_TOKEN` and `NOTION_WRITE=true`. Without `NOTION_WRITE`, only Park
    shows.
 
+## Task capture (Working Tasks)
+
+With `TASKS_ENABLED=true`, mention the bot with a task request and it adds
+one row to ✅ Working Tasks. Phrases that work include "flag this as a task",
+"add a task", "make this a task", "track this" and "task: send Eric the Hub
+link". Only `FEEDBACK_USER_IDS` can do this. It works in the review channel,
+the chat channels and the summary channel.
+
+What it turns into a task, in order:
+
+1. A forwarded or shared message on your mention (the most reliable way,
+   and the only way for channels the bot isn't in).
+2. Otherwise the thread you're in, up to your message.
+3. Otherwise your own message ("task: ...").
+
+The row gets Item, Type, Context, Next Step, Definition of Done, Who's
+Waiting, Owning Function, Source = Slack, Source Link, External Source ID
+(`slack:<channel>:<ts>`), Status = Inbox, Accountable Owner = you,
+Capture Disposition = Create task, Review Required, Agent Confidence and a
+line in Automation Notes. Due Date is set only when the message states one.
+Associated Partner(s) is linked only when exactly one Partners record matches.
+It never sets other owners, approvals, decisions or close fields.
+
+The bot replies in the thread with **Open** and **Drop**. Drop sets Status
+to Dropped, Close Reason to Declined and Closed At to today. Flagging the
+same message again links the existing task instead of creating a second one.
+That check runs against Notion, so it survives restarts.
+
+Setup: share ✅ Working Tasks (and Partners, for the partner link) with the
+Notion integration, then set `TASKS_ENABLED=true`. It needs `NOTION_WRITE=true`
+and the same token as the buttons.
+
 ## Modes
 
 - `REVIEW_MODE=shadow` (default) posts each card to #team-partnerships-development
@@ -136,7 +168,8 @@ Setup:
 
 Mention the bot with "review" inside a digest's thread, for example
 `@Team Partner Agent review`, and it runs the full review on that thread's
-HubSpot digest. The card is posted in the same thread and tags you. It
+HubSpot digest. Short polite forms work too, such as "can you review",
+"please re-review this" or "could you run the review again?". The card is posted in the same thread and tags you. It
 answers only users in `CHAT_USER_IDS`, in `REVIEW_CHANNEL_IDS` or
 `CHAT_CHANNEL_IDS`. If the thread doesn't start with a HubSpot digest, it says
 so. Other mentions still go to chat as before.
@@ -197,8 +230,8 @@ expect more "unverified".
 - Work is serial. A review takes roughly 30-90 seconds, and chat mentions wait
   behind it.
 - `/healthz` shows `review_enabled`, `review_mode`, `web_search`,
-  `notion_lookup`, `summary_enabled`, `summary_hour`, `interactive` and
-  `notion_write`.
+  `notion_lookup`, `summary_enabled`, `summary_hour`, `interactive`,
+  `notion_write` and `tasks_enabled`.
 - The instructions are prompt-cached, which lowers the cost of each review.
 - Railway logs print `Review queued digest <ts>` for each digest picked up. A
   digest-looking post from an unexpected bot prints its `bot_id` so you can add

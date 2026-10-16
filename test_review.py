@@ -250,10 +250,14 @@ class ManualTriggerTests(unittest.TestCase):
         self.assertEqual((e['kind'], e['thread_ts'], e['user']), ('review_manual', '50.1', 'U1'))
         self.assertIsNotNone(review.accept_manual(manual(text='<@UBOT>  Review this please'), CFG))
         self.assertIsNotNone(review.accept_manual(manual(channel='C1'), CFG))  # chat channels too
+        for text in ['<@UBOT> can you review', '<@UBOT> can you review?', '<@UBOT> could you please re-review this',
+                     '<@UBOT> please review', '<@UBOT> re-review', '<@UBOT> hey can you review this one again?',
+                     '<@UBOT> would you run the review again']:
+            self.assertIsNotNone(review.accept_manual(manual(text=text), CFG), text)
 
     def test_rejects_other_mentions(self):
         for change in [dict(thread_ts=None), dict(thread_ts='50.9'), dict(user='UOTHER'), dict(text='<@UBOT> summarize'),
-                       dict(text='<@UBOT> what should we review?'), dict(channel='COTHER'), dict(bot_id='B1'),
+                       dict(text='<@UBOT> what should we review?'), dict(text='<@UBOT> can you review the Q3 deck'), dict(text='<@UBOT> do not review'), dict(channel='COTHER'), dict(bot_id='B1'),
                        dict(type='message')]:
             b = manual(**change)
             if change.get('thread_ts', 1) is None:
