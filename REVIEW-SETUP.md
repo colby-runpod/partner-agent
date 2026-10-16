@@ -173,6 +173,16 @@ The agent can:
 - run up to 3 web searches (`AGENT_WEB_SEARCH=false` turns this off)
 - create one Working Task, with the same dedupe and Drop button as task
   capture (needs `TASKS_ENABLED=true`)
+- flag an existing Working Task for the weekly Partnerships update: it ticks
+  **Weekly** (which the update pulls into "Flagged this week") and adds a dated
+  progress line to Context, with an **Unflag** button
+
+It does only what you ask. "Flag/tag/include this in the weekly or next
+partnership update" (or ++weekly) flags the existing task and never creates
+one. "Track this", "remind me" or "add a task" creates a task. "Update",
+"log" or "reflect" on an existing row gets the exact change spelled out as the
+recommended next step, until Confirm buttons land. If the ask is unclear, it
+answers what it can and asks one short question.
 
 It replies once in the thread, leads with the answer, links what it used and
 ends with a one-line *Used:* note. It can't send anything, update existing

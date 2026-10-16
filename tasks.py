@@ -29,7 +29,7 @@ TASK_TYPES = ('Task', 'Reply Needed', 'Action', 'Review', 'Meeting Follow-up')
 FUNCTIONS = ('Partnerships', 'Product', 'Partner SA', 'Engineering', 'Finance', 'RevOps', 'Legal', 'Security or IT',
              'Sales', 'Customer Success', 'Support', 'Marketing or Comms', 'Supply or Capacity', 'People or Talent',
              'Operations', 'Executive', 'External party')
-TASK_ACTIONS = {'task_drop': 'Drop'}
+TASK_ACTIONS = {'task_drop': 'Drop', 'task_unflag': 'Unflag'}
 MENTIONS = re.compile(r'<[@#!][^>]*>')
 ASK = re.compile(r'\b(?:flag|add|make|create|log|capture|file|turn|save|put|open)\b[^.?!\n]{0,60}?\b(?:task|to-?do)s?\b'
                  r'|^\s*(?:please\s+)?(?:task|to-?do)\b|^\s*(?:please\s+)?track\s+(?:this|it)\b', re.I)
@@ -187,6 +187,10 @@ def _rich(text):
     return [{'type': 'text', 'text': {'content': text[i:i + 1800]}} for i in range(0, len(text), 1800)][:50]
 
 
+class NotATask(Exception):
+    pass
+
+
 class TaskWriter:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -257,6 +261,25 @@ class TaskWriter:
                                            'properties': self.properties(task, source_id, link, partner_id, today)})
         return page['url'], page['id'], bool(partner_id)
 
+    def flag_weekly(self, page_id, note, today):
+        """Tick Weekly on a Working Tasks row (the weekly update pulls these in) and add a dated progress line."""
+        page = self._req('GET', 'pages/%s' % page_id)
+        parent = str((page.get('parent') or {}).get('data_source_id') or '').replace('-', '')
+        if parent != self.cfg['tasks_source'].replace('-', ''):
+            raise NotATask()
+        props = page.get('properties') or {}
+        title = ''.join(t.get('plain_text', '') for t in (props.get('Item') or {}).get('title', [])) or 'the task'
+        update = {'Weekly': {'checkbox': True}}
+        if note:
+            old = ''.join(t.get('plain_text', '') for t in (props.get('Context') or {}).get('rich_text', []))
+            line = '%s/%s weekly: %s' % (today[5:7], today[8:10], _strip(note)[:400])
+            update['Context'] = {'rich_text': _rich((line + '\n' + old).strip()[:1900])}
+        self._req('PATCH', 'pages/%s' % page_id, {'properties': update})
+        return page.get('url', ''), title
+
+    def unflag(self, page_id):
+        self._req('PATCH', 'pages/%s' % page_id, {'properties': {'Weekly': {'checkbox': False}}})
+
     def drop(self, page_id, today):
         self._req('PATCH', 'pages/%s' % page_id, {'properties': {
             'Status': {'select': {'name': 'Dropped'}}, 'Close Reason': {'select': {'name': 'Declined'}},
@@ -294,11 +317,14 @@ def draft(call, request, source, author, today):
     return parse_task(''.join(c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text'))
 
 
-def reply_blocks(text, url, page_id, drop=True):
+def reply_blocks(text, url, page_id, drop=True, unflag=False):
     elements = [{'type': 'button', 'action_id': 'task_open', 'text': {'type': 'plain_text', 'text': 'Open'}, 'url': url}]
     if drop:
         elements.append({'type': 'button', 'action_id': 'task_drop', 'value': page_id,
                          'text': {'type': 'plain_text', 'text': 'Drop'}})
+    if unflag:
+        elements.append({'type': 'button', 'action_id': 'task_unflag', 'value': page_id,
+                         'text': {'type': 'plain_text', 'text': 'Unflag'}})
     return [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': text[:2900], 'verbatim': True}},
             {'type': 'actions', 'elements': elements}]
 
@@ -385,14 +411,16 @@ def process_task_action(store, job, clients, writer, now=None):
         clients.ephemeral(event, 'Notion writing is turned off (NOTION_WRITE), so nothing was changed.')
         return
     today = (now or dt.date.today()).isoformat()
+    unflag = event.get('action') == 'task_unflag'
     try:
-        writer.drop(event['page_id'], today)
+        writer.unflag(event['page_id']) if unflag else writer.drop(event['page_id'], today)
     except Exception:
-        print('Task drop failed.', flush=True)
+        print('Task %s failed.' % ('unflag' if unflag else 'drop'), flush=True)
         clients.ephemeral(event, "That didn't go through, and the task wasn't changed. Try again in a minute.")
         return
     url = 'https://www.notion.so/' + event['page_id'].replace('-', '')
-    text = '%s\n:wastebasket: Dropped by <@%s>' % (event.get('message_text') or 'Task', event['user'])
+    text = '%s\n%s by <@%s>' % (event.get('message_text') or 'Task',
+                                 ':arrow_backward: Weekly flag removed' if unflag else ':wastebasket: Dropped', event['user'])
     try:
         clients.update_blocks(event['channel'], event['message_ts'], text, reply_blocks(text, url, event['page_id'], drop=False))
     except Exception:
