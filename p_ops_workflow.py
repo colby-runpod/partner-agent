@@ -341,10 +341,10 @@ def step_blocks(flow, step):
     value = flow["id"] + ":" + step["step_key"]
     mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
     blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": "*%d. %s*\n%s" %
-            (number, mention + step["prompt"], step["context"]), "verbatim": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "%s:point_right: *Decision %d: %s*\n_%s_" %
+            (mention, number, step["prompt"], step["context"]), "verbatim": True}},
         {"type": "context", "elements": [{"type": "mrkdwn",
-            "text": "Click a button or reply `yes`, `no`, or `hold`.", "verbatim": True}]},
+            "text": "*Quick reply:* click a button or type `yes`, `no`, or `hold`.", "verbatim": True}]},
     ]
     if link_text:
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": link_text, "verbatim": True}]})
@@ -375,7 +375,8 @@ class SlackApprovalClient:
         mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         result = api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.channel, "thread_ts": flow["thread_ts"],
-            "text": mention + step["prompt"] + " " + step["context"], "blocks": step_blocks(flow, step),
+            "text": mention + ":point_right: *Decision needed:* " + step["prompt"] + "\n_" + step["context"] + "_",
+            "blocks": step_blocks(flow, step),
             "unfurl_links": False, "unfurl_media": False})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm approval-step delivery.")
@@ -385,24 +386,27 @@ class SlackApprovalClient:
         mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.channel, "thread_ts": flow["thread_ts"],
-            "text": mention + "Reply in this thread with one sentence describing what should change. I’ll record it and continue the review.",
+            "text": (mention + ":speech_balloon: *What should change?*\n"
+                     "Reply with one sentence. I’ll record it and continue the review."),
             "mrkdwn": True, "parse": "none", "unfurl_links": False, "unfurl_media": False})
 
     def update_answered(self, flow, step, event, outcome):
         labels = {"next": "Approved", "completed": "Approved", "declined": "Declined",
                   "held": "Held", "awaiting_context": "Context requested"}
         label = labels.get(outcome, "Recorded")
+        icon = {"Approved": ":white_check_mark:", "Declined": ":x:", "Held": ":pause_button:",
+                "Context requested": ":speech_balloon:"}.get(label, ":memo:")
         api("https://slack.com/api/chat.update", self.token, {
             "channel": self.channel, "ts": step["message_ts"],
             "text": "%s: %s" % (label, step["prompt"]),
             "blocks": [{"type": "section", "text": {"type": "mrkdwn",
-                "text": "*%s* · <@%s>\n%s" % (label, event["user_id"], step["prompt"]), "verbatim": True}}]})
+                "text": "%s *%s* · <@%s>\n%s" % (icon, label, event["user_id"], step["prompt"]), "verbatim": True}}]})
 
     def post_outcome(self, flow, outcome):
-        labels = {"completed": "Review complete. All questions are recorded.",
-                  "declined": "Review stopped. The current recommendation was declined.",
-                  "held": "Review paused. No gated action will move forward.",
-                  "next": "Decision recorded. Here’s the next question."}
+        labels = {"completed": ":white_check_mark: *Review complete.*\nAll decisions are recorded.",
+                  "declined": ":x: *Review stopped.*\nThe current recommendation was declined.",
+                  "held": ":pause_button: *Review paused.*\nNo gated action will move forward.",
+                  "next": ":white_check_mark: *Decision recorded.*\nHere’s the next question."}
         mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.channel, "thread_ts": flow["thread_ts"],

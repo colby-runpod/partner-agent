@@ -17,6 +17,7 @@ from intake import api, flatten, verify
 
 
 REACTION = "handshake::skin-tone-2"
+STATUS_REACTIONS = ("hourglass_flowing_sand", "white_check_mark", "warning")
 
 
 def _ids(value):
@@ -170,12 +171,37 @@ class SlackCaptureClient:
         mention = "<@%s> " % requester_user_id if re.fullmatch(r"[A-Z0-9]+", requester_user_id or "") else ""
         result = api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": channel, "thread_ts": thread_ts,
-            "text": (mention + "Captured. I’m reviewing the thread, checking related Working Tasks, and deciding "
-                     "whether this should be advanced, merged, routed, held, or closed. I’ll post the result here."),
+            "text": (mention + ":hourglass_flowing_sand: *Got it-I’m reviewing this now.*\n"
+                     "I’m checking the thread, related Working Tasks, and the best next disposition. "
+                     "I’ll post the result here."),
             "mrkdwn": True, "parse": "none", "unfurl_links": False, "unfurl_media": False})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm capture acknowledgement.")
         return result["ts"]
+
+    def set_status(self, channel, ts, reaction):
+        """Keep one p-OPS status reaction on the source message."""
+        if reaction not in STATUS_REACTIONS:
+            raise ValueError("Unsupported p-OPS status reaction.")
+        for current in STATUS_REACTIONS:
+            if current == reaction:
+                continue
+            try:
+                api("https://slack.com/api/reactions.remove", self.token,
+                    {"channel": channel, "timestamp": ts, "name": current})
+            except Exception:
+                pass
+        api("https://slack.com/api/reactions.add", self.token,
+            {"channel": channel, "timestamp": ts, "name": reaction})
+        return reaction
+
+
+def set_capture_status(client, event, reaction):
+    """Status reactions are helpful but must never block task processing."""
+    try:
+        return client.set_status(event["channel"], event["ts"], reaction)
+    except Exception:
+        return "unavailable"
 
 
 def acknowledge_capture(store, event_id, client):

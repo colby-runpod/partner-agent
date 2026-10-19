@@ -40,9 +40,13 @@ class NotificationTests(unittest.TestCase):
         content = self.ledger.get("triage-1")["content"]
         self.assertEqual("123.456", self.ledger.get("triage-1")["thread_ts"])
         self.assertEqual("U1", self.ledger.get("triage-1")["requester_user_id"])
-        self.assertTrue(content.startswith("<@U1> p-OPS review:"))
-        self.assertIn("https://notion.example/task", content)
-        self.assertIn("https://p-ops.example/review#approvals", content)
+        self.assertTrue(content.startswith("<@U1> :mag: *p-OPS review:"))
+        self.assertIn("*Disposition:* create child action", content)
+        self.assertIn("*Why*\n• The POC has a concrete follow-up.", content)
+        self.assertIn("*Recommended next step*", content)
+        self.assertIn("p-OPS is still in review-first pilot mode.", content)
+        self.assertIn("<https://notion.example/task|Working Task>", content)
+        self.assertIn("<https://p-ops.example/review#approvals|Open p-OPS>", content)
         calls = []
         result = self.ledger.publish("triage-1", "C-DIFFERENT", lambda row: calls.append(row))
         self.assertEqual("review", result)

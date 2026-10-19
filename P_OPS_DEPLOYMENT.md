@@ -46,7 +46,10 @@ To enable sequential Slack approvals, configure the Slack app interactivity URL
 as `https://YOUR-HOST/slack/interactions`. Keep the existing Events URL at
 `https://YOUR-HOST/slack/events`; subscribe to public and private channel
 message events so an allowlisted reply can provide context. The handshake
-capture also requires the `reaction_added` event and `reactions:read` scope.
+capture also requires the `reaction_added` event plus `reactions:read` and
+`reactions:write` scopes. p-OPS uses an hourglass while it is processing, a
+white check mark when the review is ready, and a warning if processing needs
+operator attention.
 Then set:
 
 - `P_OPS_REVIEW_INTERACTIVE_ENABLED=true`

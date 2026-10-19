@@ -63,7 +63,7 @@ The current Slack chat service automatically posts answers. It is not the p-OPS 
 All new capabilities are off unless their individual gate is exactly `true`:
 
 - `P_OPS_CAPTURE_ENABLED` accepts Slack capture events. `P_OPS_CAPTURE_CHANNEL_IDS` and `P_OPS_CAPTURE_USER_IDS` are required comma-separated allowlists.
-- The p-OPS Slack app must subscribe to both `reaction_added` and `app_mention`. It also needs the applicable channel-history scope so it can read the source thread.
+- The p-OPS Slack app must subscribe to both `reaction_added` and `app_mention`. It also needs the applicable channel-history scope so it can read the source thread, plus `reactions:read` and `reactions:write` so it can show processing and completion status on the source message.
 - `P_OPS_NOTION_WRITE` permits approved Notion actions.
 - `P_OPS_NOTION_CREATE` permits an approved, duplicate-checked Inbox proposal to become a Working Task.
 - `P_OPS_LINEAR_WRITE` permits an approved Linear draft to be created after a duplicate search.

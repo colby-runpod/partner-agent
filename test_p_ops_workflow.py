@@ -65,6 +65,8 @@ class WorkflowTests(unittest.TestCase):
                          [row["step_key"] for row in steps])
         blocks = step_blocks(flow, self.ledger.current_step(self.flow_id))
         self.assertIn("<@U1>", blocks[0]["text"]["text"])
+        self.assertIn(":point_right: *Decision 1:", blocks[0]["text"]["text"])
+        self.assertIn("*Quick reply:*", blocks[1]["elements"][0]["text"])
         self.assertEqual(["p_ops_approve", "p_ops_decline", "p_ops_context", "p_ops_hold"],
                          [row["action_id"] for row in blocks[-1]["elements"]])
 
@@ -75,7 +77,7 @@ class WorkflowTests(unittest.TestCase):
             SlackApprovalClient("C-REVIEW", "xoxb-test").post_step(flow, step)
         payload = mocked.call_args.args[2]
         self.assertEqual("100.1", payload["thread_ts"])
-        self.assertTrue(payload["text"].startswith("<@U1> "))
+        self.assertTrue(payload["text"].startswith("<@U1> :point_right: *Decision needed:*"))
         self.assertIn("<@U1>", payload["blocks"][0]["text"]["text"])
 
     def test_buttons_advance_and_context_reply_is_recorded(self):

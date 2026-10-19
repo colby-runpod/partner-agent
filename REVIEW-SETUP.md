@@ -87,7 +87,7 @@ thumbs up and down, how often the bot and you agreed, each correction, and
 the most common miss if it happened twice or more. A repeated miss is the cue
 to change a rule in `decide()`.
 
-Slack setup: add the `reactions:read` scope and subscribe to the
+Slack setup: add the `reactions:read` and `reactions:write` scopes and subscribe to the
 `reaction_added` and `reaction_removed` bot events, then reinstall the app.
 Cards posted before this release don't record their message ID, so reactions
 only count on new cards. Corrections in a thread work for any card from PR A

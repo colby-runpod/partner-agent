@@ -34,7 +34,7 @@ class FakeSlackApp:
 
 
 class FakeCaptureClient:
-    def __init__(self): self.acks = []
+    def __init__(self): self.acks, self.statuses = [], []
     def message(self, channel, ts):
         return {"ts": ts, "user": "U2", "text": "Prepare Redis follow-up"}
     def permalink(self, channel, ts):
@@ -42,6 +42,9 @@ class FakeCaptureClient:
     def acknowledge(self, channel, thread_ts, requester_user_id):
         self.acks.append((channel, thread_ts, requester_user_id))
         return "170.001"
+    def set_status(self, channel, ts, reaction):
+        self.statuses.append((channel, ts, reaction))
+        return reaction
 
 
 class FakeNotion:
@@ -320,6 +323,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("901.123", sender.rows[0]["thread_ts"])
         self.assertEqual("901.123", approvals.steps[0][0]["thread_ts"])
         self.assertEqual([("C1", "901.123", "U1")], capture_client.acks)
+        self.assertEqual([
+            ("C1", "901.123", "hourglass_flowing_sand"),
+            ("C1", "901.123", "white_check_mark"),
+        ], capture_client.statuses)
 
 
 if __name__ == "__main__":

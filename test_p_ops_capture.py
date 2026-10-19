@@ -22,7 +22,7 @@ def body(**event_changes):
 
 
 class FakeSlack:
-    def __init__(self): self.acks = []
+    def __init__(self): self.acks, self.statuses = [], []
     def message(self, channel, ts):
         return {"ts": ts, "thread_ts": "123.000", "user": "U2", "text": "Follow up with this partner"}
     def permalink(self, channel, ts):
@@ -35,6 +35,9 @@ class FakeSlack:
     def acknowledge(self, channel, thread_ts, requester_user_id):
         self.acks.append((channel, thread_ts, requester_user_id))
         return "124.000"
+    def set_status(self, channel, ts, reaction):
+        self.statuses.append((channel, ts, reaction))
+        return reaction
 
 
 class CaptureTests(unittest.TestCase):
@@ -96,8 +99,20 @@ class CaptureTests(unittest.TestCase):
             SlackCaptureClient("xoxb-test").acknowledge("C1", "123.000", "U1")
         payload = mocked.call_args.args[2]
         self.assertEqual("123.000", payload["thread_ts"])
-        self.assertTrue(payload["text"].startswith("<@U1> Captured."))
+        self.assertTrue(payload["text"].startswith("<@U1> :hourglass_flowing_sand: *Got it-I’m reviewing this now.*"))
+        self.assertIn("related Working Tasks", payload["text"])
         self.assertTrue(payload["mrkdwn"])
+
+    def test_status_reaction_replaces_other_p_ops_statuses(self):
+        with patch("p_ops_capture.api", return_value={"ok": True}) as mocked:
+            result = SlackCaptureClient("xoxb-test").set_status("C1", "123.000", "white_check_mark")
+        self.assertEqual("white_check_mark", result)
+        calls = [(call.args[0], call.args[2]) for call in mocked.call_args_list]
+        self.assertEqual("https://slack.com/api/reactions.remove", calls[0][0])
+        self.assertEqual("hourglass_flowing_sand", calls[0][1]["name"])
+        self.assertEqual("warning", calls[1][1]["name"])
+        self.assertEqual("https://slack.com/api/reactions.add", calls[2][0])
+        self.assertEqual("white_check_mark", calls[2][1]["name"])
 
     def test_receiver_requires_valid_slack_signature(self):
         raw = json.dumps(body()).encode()

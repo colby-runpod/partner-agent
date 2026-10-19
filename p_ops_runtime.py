@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from intake import Application, api, verify
 from p_ops_approval import ApprovalLedger, send_message
 from p_ops_capture import (CaptureStore, SlackCaptureClient, accept_capture, acknowledge_capture,
-                           load_capture_config, resolve_capture)
+                           load_capture_config, resolve_capture, set_capture_status)
 from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, RemoteError, apply_ready, preview
@@ -1117,8 +1117,14 @@ def run_once(cfg, stores, clients=None, today=None):
     results = []
     for row in capture.rows(("pending",))[:10]:
         client = clients.get("slack_capture") or SlackCaptureClient()
+        event = json.loads(row["payload"])
+        processing_status = set_capture_status(client, event, "hourglass_flowing_sand")
         state = resolve_capture(capture, row["event_id"], client)
         results.append(("capture", row["event_id"], state))
+        results.append(("capture_status", row["event_id"], processing_status))
+        if state == "review":
+            results.append(("capture_status", row["event_id"],
+                            set_capture_status(client, event, "warning")))
         if state == "captured" and cfg.get("review_posting"):
             results.append(("capture_ack", row["event_id"], acknowledge_capture(capture, row["event_id"], client)))
     if cfg.get("review_posting"):
@@ -1148,8 +1154,20 @@ def run_once(cfg, stores, clients=None, today=None):
         if cfg.get("review_posting"):
             sender = clients.get("review_sender") or SlackReviewSender(cfg["review_channel"])
             for row in notifications.rows(("queued",)):
-                results.append(("review_notification", row["triage_id"],
-                                notifications.publish(row["triage_id"], cfg["review_channel"], sender)))
+                notification_state = notifications.publish(row["triage_id"], cfg["review_channel"], sender)
+                results.append(("review_notification", row["triage_id"], notification_state))
+                try:
+                    shadow_row = triage_ledger.get(row["triage_id"])
+                    source = json.loads(shadow_row["bundle_json"]).get("source") or {}
+                    capture_client = clients.get("slack_capture") or SlackCaptureClient()
+                    status = "white_check_mark" if notification_state == "sent" else "warning"
+                    results.append(("capture_status", row["triage_id"],
+                                    set_capture_status(capture_client, {
+                                        "channel": source.get("channel", ""),
+                                        "ts": source.get("thread_ts", ""),
+                                    }, status)))
+                except (KeyError, ValueError, TypeError):
+                    pass
         if cfg.get("review_interactive"):
             flows = ApprovalFlowLedger(cfg["db"])
             for notice in notifications.rows(("sent",)):

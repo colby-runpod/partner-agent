@@ -16,6 +16,30 @@ def _clean(value, limit):
     return value[:limit]
 
 
+def _label(value, fallback="not set"):
+    return _clean(value or fallback, 80).replace("_", " ")
+
+
+def _link(url, label):
+    return "<%s|%s>" % (_clean(url, 1000), label)
+
+
+REVIEW_REASON_LABELS = {
+    "assumptions_or_missing_evidence": "Some assumptions or missing evidence need confirmation.",
+    "confidence_below_0.80": "Confidence is below the autonomous-action threshold.",
+    "handoff_or_reassignment_review": "The proposed owner or department handoff needs approval.",
+    "linear_creation_requires_review_during_pilot": "Creating a Linear issue still requires approval during the pilot.",
+    "message_requires_review": "Any outbound message must be reviewed before it is sent.",
+    "pilot_shadow_mode": "p-OPS is still in review-first pilot mode.",
+    "policy_violation": "The proposed action is outside the agent’s current permissions.",
+    "sensitive_data": "The source may contain sensitive data that needs careful handling.",
+}
+
+
+def _review_reason(value):
+    return REVIEW_REASON_LABELS.get(value, value.replace("_", " ").capitalize() + ".")
+
+
 def review_card(shadow_row, console_url="", requester_user_id=""):
     guarded = json.loads(shadow_row["decision_json"])
     decision = guarded["decision"]
@@ -23,28 +47,33 @@ def review_card(shadow_row, console_url="", requester_user_id=""):
     source = json.loads(shadow_row["bundle_json"]).get("source") or {}
     review_required = bool(guarded.get("review_required"))
     mention = "<@%s> " % requester_user_id if requester_user_id and requester_user_id.isalnum() else ""
+    icon = ":mag:" if review_required else ":white_check_mark:"
+    heading = "p-OPS review" if review_required else "p-OPS complete"
     lines = [
-        mention + ("p-OPS review: " if review_required else "p-OPS complete: ") + _clean(decision.get("title"), 180),
-        "Disposition: " + _clean(decision.get("disposition"), 80).replace("_", " "),
-        "Priority: %s · Severity: %s · Confidence: %s" % (
-            _clean(decision.get("priority") or "not set", 40),
-            _clean(decision.get("severity") or "not set", 40),
-            _clean(decision.get("confidence") or "not set", 40)),
-        "Why: " + _clean(decision.get("summary"), 500),
-        "Next: " + _clean(decision.get("next_step"), 500),
-        "Completed: Evidence was reviewed and the disposition was evaluated. No gated action was taken.",
+        mention + "%s *%s: %s*" % (icon, heading, _clean(decision.get("title"), 180)),
+        "*Disposition:* %s\n*Priority:* %s  |  *Severity:* %s  |  *Confidence:* %s" % (
+            _label(decision.get("disposition")), _label(decision.get("priority")),
+            _label(decision.get("severity")), _label(decision.get("confidence"))),
+        "*Why*\n• " + _clean(decision.get("summary"), 500),
+        "*Recommended next step*\n• " + _clean(decision.get("next_step"), 500),
+        "*Already completed*\n• Reviewed the evidence and evaluated the disposition. No gated action was taken.",
     ]
     if reasons:
-        lines.insert(5, "Review reason: " + _clean(", ".join(reasons), 500))
-    lines.append("Your input: use the buttons below." if review_required else "No response needed unless you want to correct this disposition.")
+        readable = [_review_reason(reason) for reason in reasons]
+        lines.insert(4, "*Why I need you*\n" + "\n".join("• " + _clean(reason, 180) for reason in readable))
+    lines.append(":point_right: *Your input:* Use the buttons below." if review_required else
+                 "_No response needed unless you want to correct this disposition._")
+    links = []
     if source.get("url"):
-        lines.append("Source: " + _clean(source["url"], 1000))
+        links.append(_link(source["url"], "Source"))
     bundle = json.loads(shadow_row["bundle_json"])
     task_urls = [row.get("url") for row in bundle.get("existing_tasks") or [] if row.get("url")]
     if task_urls:
-        lines.append("Task: " + _clean(task_urls[0], 1000))
+        links.append(_link(task_urls[0], "Working Task"))
     if console_url:
-        lines.append("p-OPS review: " + _clean(console_url.rstrip("/") + "/review#approvals", 1000))
+        links.append(_link(console_url.rstrip("/") + "/review#approvals", "Open p-OPS"))
+    if links:
+        lines.append("*Open:* " + "  ·  ".join(links))
     return "\n".join(lines)
 
 
