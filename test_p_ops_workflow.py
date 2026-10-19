@@ -5,9 +5,10 @@ import json
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import urllib.parse
 
-from p_ops_workflow import (ApprovalFlowLedger, accept_action, accept_context_reply,
+from p_ops_workflow import (ApprovalFlowLedger, SlackApprovalClient, accept_action, accept_context_reply,
                             process_flows, receive_interaction, step_blocks)
 
 
@@ -26,7 +27,7 @@ def shadow_row():
             "proposed_actions": ["prepare_handoff", "prepare_linear_issue", "prepare_message"],
         }, "review_required": True, "policy_reasons": ["pilot_shadow_mode"]}),
         "bundle_json": json.dumps({
-            "source": {"url": "https://slack.example/source"},
+            "source": {"url": "https://slack.example/source", "requester_user_id": "U1"},
             "existing_tasks": [{"url": "https://notion.example/task"}],
         }),
     }
@@ -54,6 +55,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_flow_keeps_links_and_builds_sequential_questions(self):
         flow = self.ledger.flow(self.flow_id)
+        self.assertEqual("U1", flow["requester_user_id"])
         links = json.loads(flow["links_json"])
         self.assertEqual(["Source", "Open task", "Open p-OPS"], [row["label"] for row in links])
         with self.ledger.connect() as db:
@@ -62,8 +64,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(["recommendation", "handoff", "linear", "message_direction"],
                          [row["step_key"] for row in steps])
         blocks = step_blocks(flow, self.ledger.current_step(self.flow_id))
+        self.assertIn("<@U1>", blocks[0]["text"]["text"])
         self.assertEqual(["p_ops_approve", "p_ops_decline", "p_ops_context", "p_ops_hold"],
                          [row["action_id"] for row in blocks[-1]["elements"]])
+
+    def test_question_tags_requester_and_stays_in_origin_thread(self):
+        flow = self.ledger.flow(self.flow_id)
+        step = self.ledger.current_step(self.flow_id)
+        with patch("p_ops_workflow.api", return_value={"ts": "200.1"}) as mocked:
+            SlackApprovalClient("C-REVIEW", "xoxb-test").post_step(flow, step)
+        payload = mocked.call_args.args[2]
+        self.assertEqual("100.1", payload["thread_ts"])
+        self.assertTrue(payload["text"].startswith("<@U1> "))
+        self.assertIn("<@U1>", payload["blocks"][0]["text"]["text"])
 
     def test_buttons_advance_and_context_reply_is_recorded(self):
         client = FakeSlack()

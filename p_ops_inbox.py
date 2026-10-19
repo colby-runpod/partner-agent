@@ -34,6 +34,7 @@ def proposal_from_capture(capture):
         "source_url": source_url,
         "source_channel": event.get("channel", ""),
         "source_thread_ts": capture.get("thread_ts", ""),
+        "requester_user_id": event.get("reactor", ""),
     }
     return fields
 

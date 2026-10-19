@@ -39,8 +39,8 @@ class FakeCaptureClient:
         return {"ts": ts, "user": "U2", "text": "Prepare Redis follow-up"}
     def permalink(self, channel, ts):
         return "https://slack.example/source"
-    def acknowledge(self, channel, thread_ts):
-        self.acks.append((channel, thread_ts))
+    def acknowledge(self, channel, thread_ts, requester_user_id):
+        self.acks.append((channel, thread_ts, requester_user_id))
         return "170.001"
 
 
@@ -319,7 +319,7 @@ class RuntimeTests(unittest.TestCase):
         run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
         self.assertEqual("901.123", sender.rows[0]["thread_ts"])
         self.assertEqual("901.123", approvals.steps[0][0]["thread_ts"])
-        self.assertEqual([("C1", "901.123")], capture_client.acks)
+        self.assertEqual([("C1", "901.123", "U1")], capture_client.acks)
 
 
 if __name__ == "__main__":

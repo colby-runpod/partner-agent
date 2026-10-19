@@ -389,7 +389,7 @@ class SlackReviewSender:
         if row["channel"] != self.expected_channel:
             raise ValueError("Review notification destination is not authorized.")
         result = api("https://slack.com/api/chat.postMessage", self.token, {
-            "channel": self.expected_channel, "text": row["content"], "mrkdwn": False,
+            "channel": self.expected_channel, "text": row["content"], "mrkdwn": True,
             "parse": "none", "unfurl_links": False, "unfurl_media": False,
             **({"thread_ts": row["thread_ts"]} if row.get("thread_ts") else {})})
         if not result.get("ts"):
@@ -1143,7 +1143,8 @@ def run_once(cfg, stores, clients=None, today=None):
                 source = json.loads(row["bundle_json"]).get("source") or {}
                 channel = source.get("channel") if source.get("channel") == cfg.get("review_channel") else cfg.get("review_channel", "")
                 thread_ts = source.get("thread_ts") if channel == source.get("channel") else ""
-                notifications.queue(row, channel, cfg.get("public_url", ""), thread_ts)
+                notifications.queue(row, channel, cfg.get("public_url", ""), thread_ts,
+                                    source.get("requester_user_id", ""))
         if cfg.get("review_posting"):
             sender = clients.get("review_sender") or SlackReviewSender(cfg["review_channel"])
             for row in notifications.rows(("queued",)):

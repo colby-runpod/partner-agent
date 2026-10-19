@@ -16,14 +16,15 @@ def _clean(value, limit):
     return value[:limit]
 
 
-def review_card(shadow_row, console_url=""):
+def review_card(shadow_row, console_url="", requester_user_id=""):
     guarded = json.loads(shadow_row["decision_json"])
     decision = guarded["decision"]
     reasons = guarded.get("policy_reasons") or []
     source = json.loads(shadow_row["bundle_json"]).get("source") or {}
     review_required = bool(guarded.get("review_required"))
+    mention = "<@%s> " % requester_user_id if requester_user_id and requester_user_id.isalnum() else ""
     lines = [
-        ("p-OPS review: " if review_required else "p-OPS complete: ") + _clean(decision.get("title"), 180),
+        mention + ("p-OPS review: " if review_required else "p-OPS complete: ") + _clean(decision.get("title"), 180),
         "Disposition: " + _clean(decision.get("disposition"), 80).replace("_", " "),
         "Priority: %s · Severity: %s · Confidence: %s" % (
             _clean(decision.get("priority") or "not set", 40),
@@ -54,30 +55,33 @@ class ReviewNotificationLedger:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("""CREATE TABLE IF NOT EXISTS p_ops_review_notifications (
-                triage_id TEXT PRIMARY KEY, channel TEXT NOT NULL, thread_ts TEXT,
+                triage_id TEXT PRIMARY KEY, channel TEXT NOT NULL, thread_ts TEXT, requester_user_id TEXT,
                 content TEXT NOT NULL,
                 content_hash TEXT NOT NULL, state TEXT NOT NULL, created REAL NOT NULL,
                 updated REAL NOT NULL, sent_at REAL, external_id TEXT, error TEXT)""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(p_ops_review_notifications)")}
             if "thread_ts" not in columns:
                 db.execute("ALTER TABLE p_ops_review_notifications ADD COLUMN thread_ts TEXT")
+            if "requester_user_id" not in columns:
+                db.execute("ALTER TABLE p_ops_review_notifications ADD COLUMN requester_user_id TEXT")
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=2)
         db.row_factory = sqlite3.Row
         return db
 
-    def queue(self, shadow_row, channel, console_url="", thread_ts=""):
+    def queue(self, shadow_row, channel, console_url="", thread_ts="", requester_user_id=""):
         if not channel.strip():
             raise ValueError("The review notification channel is required.")
-        content = review_card(shadow_row, console_url)
+        content = review_card(shadow_row, console_url, requester_user_id)
         digest = hashlib.sha256(content.encode()).hexdigest()
         now = time.time()
         with self.connect() as db:
             db.execute("""INSERT OR IGNORE INTO p_ops_review_notifications
-                (triage_id,channel,thread_ts,content,content_hash,state,created,updated)
-                VALUES (?,?,?,?,?,'queued',?,?)""",
-                (shadow_row["id"], channel, thread_ts or None, content, digest, now, now))
+                (triage_id,channel,thread_ts,requester_user_id,content,content_hash,state,created,updated)
+                VALUES (?,?,?,?,?,?,'queued',?,?)""",
+                (shadow_row["id"], channel, thread_ts or None, requester_user_id or None,
+                 content, digest, now, now))
 
     def rows(self, states=None):
         with self.connect() as db:

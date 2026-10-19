@@ -86,9 +86,12 @@ class ApprovalFlowLedger:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("""CREATE TABLE IF NOT EXISTS p_ops_approval_flows (
                 id TEXT PRIMARY KEY, triage_id TEXT UNIQUE NOT NULL, channel TEXT NOT NULL,
-                thread_ts TEXT NOT NULL, title TEXT NOT NULL, links_json TEXT NOT NULL,
+                thread_ts TEXT NOT NULL, requester_user_id TEXT, title TEXT NOT NULL, links_json TEXT NOT NULL,
                 state TEXT NOT NULL, current_position INTEGER NOT NULL DEFAULT 0,
                 created REAL NOT NULL, updated REAL NOT NULL, completed REAL, error TEXT)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(p_ops_approval_flows)")}
+            if "requester_user_id" not in columns:
+                db.execute("ALTER TABLE p_ops_approval_flows ADD COLUMN requester_user_id TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS p_ops_approval_steps (
                 flow_id TEXT NOT NULL, position INTEGER NOT NULL, step_key TEXT NOT NULL,
                 prompt TEXT NOT NULL, context TEXT NOT NULL, state TEXT NOT NULL,
@@ -110,11 +113,13 @@ class ApprovalFlowLedger:
         guarded = json.loads(shadow_row["decision_json"])
         title = _clean(guarded["decision"].get("title"), 240)
         specs, now = _step_specs(shadow_row), time.time()
+        source = json.loads(shadow_row["bundle_json"]).get("source") or {}
+        requester_user_id = _clean(source.get("requester_user_id"), 40)
         with self.connect() as db:
             db.execute("""INSERT OR IGNORE INTO p_ops_approval_flows
-                (id,triage_id,channel,thread_ts,title,links_json,state,created,updated)
-                VALUES (?,?,?,?,?,?,'pending_post',?,?)""",
-                (flow_id, shadow_row["id"], channel, thread_ts,
+                (id,triage_id,channel,thread_ts,requester_user_id,title,links_json,state,created,updated)
+                VALUES (?,?,?,?,?,?,?,'pending_post',?,?)""",
+                (flow_id, shadow_row["id"], channel, thread_ts, requester_user_id,
                  title, json.dumps(_links(shadow_row, console_url)), now, now))
             for position, spec in enumerate(specs):
                 db.execute("""INSERT OR IGNORE INTO p_ops_approval_steps
@@ -334,9 +339,10 @@ def step_blocks(flow, step):
     link_text = " · ".join("<%s|%s>" % (item["url"], item["label"]) for item in links)
     number = int(step["position"]) + 1
     value = flow["id"] + ":" + step["step_key"]
+    mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": "*%d. %s*\n%s" %
-            (number, step["prompt"], step["context"]), "verbatim": True}},
+            (number, mention + step["prompt"], step["context"]), "verbatim": True}},
         {"type": "context", "elements": [{"type": "mrkdwn",
             "text": "Click a button or reply `yes`, `no`, or `hold`.", "verbatim": True}]},
     ]
@@ -366,19 +372,21 @@ class SlackApprovalClient:
     def post_step(self, flow, step):
         if flow["channel"] != self.channel:
             raise ValueError("Approval flow channel is not authorized.")
+        mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         result = api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.channel, "thread_ts": flow["thread_ts"],
-            "text": step["prompt"] + " " + step["context"], "blocks": step_blocks(flow, step),
+            "text": mention + step["prompt"] + " " + step["context"], "blocks": step_blocks(flow, step),
             "unfurl_links": False, "unfurl_media": False})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm approval-step delivery.")
         return result["ts"]
 
     def post_context_prompt(self, flow):
+        mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.channel, "thread_ts": flow["thread_ts"],
-            "text": "Reply in this thread with one sentence describing what should change. I’ll record it and continue the review.",
-            "mrkdwn": False, "parse": "none", "unfurl_links": False, "unfurl_media": False})
+            "text": mention + "Reply in this thread with one sentence describing what should change. I’ll record it and continue the review.",
+            "mrkdwn": True, "parse": "none", "unfurl_links": False, "unfurl_media": False})
 
     def update_answered(self, flow, step, event, outcome):
         labels = {"next": "Approved", "completed": "Approved", "declined": "Declined",
@@ -395,9 +403,11 @@ class SlackApprovalClient:
                   "declined": "Review stopped. The current recommendation was declined.",
                   "held": "Review paused. No gated action will move forward.",
                   "next": "Decision recorded. Here’s the next question."}
+        mention = "<@%s> " % flow.get("requester_user_id") if flow.get("requester_user_id") else ""
         api("https://slack.com/api/chat.postMessage", self.token, {
-            "channel": self.channel, "thread_ts": flow["thread_ts"], "text": labels.get(outcome, "Decision recorded."),
-            "mrkdwn": False, "parse": "none", "unfurl_links": False, "unfurl_media": False})
+            "channel": self.channel, "thread_ts": flow["thread_ts"],
+            "text": mention + labels.get(outcome, "Decision recorded."),
+            "mrkdwn": True, "parse": "none", "unfurl_links": False, "unfurl_media": False})
 
 
 def process_flows(ledger, client):

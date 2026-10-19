@@ -4,8 +4,9 @@ import hashlib
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from p_ops_capture import (CaptureStore, REACTION, accept_capture, accept_mention, acknowledge_capture,
+from p_ops_capture import (CaptureStore, REACTION, SlackCaptureClient, accept_capture, accept_mention, acknowledge_capture,
                            accept_reaction, receive, resolve_capture)
 
 
@@ -31,8 +32,8 @@ class FakeSlack:
             {"ts": ts, "user": "U2", "text": "Follow up with this partner"},
             {"ts": "123.456", "user": "U1", "text": "<@UBOT> what should we do next?"},
         ]
-    def acknowledge(self, channel, thread_ts):
-        self.acks.append((channel, thread_ts))
+    def acknowledge(self, channel, thread_ts, requester_user_id):
+        self.acks.append((channel, thread_ts, requester_user_id))
         return "124.000"
 
 
@@ -88,7 +89,15 @@ class CaptureTests(unittest.TestCase):
         resolve_capture(self.store, "Ev1", client)
         self.assertEqual("acknowledged", acknowledge_capture(self.store, "Ev1", client))
         self.assertEqual("skipped", acknowledge_capture(self.store, "Ev1", client))
-        self.assertEqual([("C1", "123.000")], client.acks)
+        self.assertEqual([("C1", "123.000", "U1")], client.acks)
+
+    def test_acknowledgement_tags_requester_and_replies_in_source_thread(self):
+        with patch("p_ops_capture.api", return_value={"ts": "124.000"}) as mocked:
+            SlackCaptureClient("xoxb-test").acknowledge("C1", "123.000", "U1")
+        payload = mocked.call_args.args[2]
+        self.assertEqual("123.000", payload["thread_ts"])
+        self.assertTrue(payload["text"].startswith("<@U1> Captured."))
+        self.assertTrue(payload["mrkdwn"])
 
     def test_receiver_requires_valid_slack_signature(self):
         raw = json.dumps(body()).encode()

@@ -166,12 +166,13 @@ class SlackCaptureClient:
             raise ValueError("Slack did not return the complete source thread.")
         return messages
 
-    def acknowledge(self, channel, thread_ts):
+    def acknowledge(self, channel, thread_ts, requester_user_id):
+        mention = "<@%s> " % requester_user_id if re.fullmatch(r"[A-Z0-9]+", requester_user_id or "") else ""
         result = api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": channel, "thread_ts": thread_ts,
-            "text": ("Captured. I’m reviewing the thread, checking related Working Tasks, and deciding "
+            "text": (mention + "Captured. I’m reviewing the thread, checking related Working Tasks, and deciding "
                      "whether this should be advanced, merged, routed, held, or closed. I’ll post the result here."),
-            "mrkdwn": False, "parse": "none", "unfurl_links": False, "unfurl_media": False})
+            "mrkdwn": True, "parse": "none", "unfurl_links": False, "unfurl_media": False})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm capture acknowledgement.")
         return result["ts"]
@@ -183,7 +184,7 @@ def acknowledge_capture(store, event_id, client):
         return "skipped"
     event = json.loads(row["payload"])
     try:
-        ack_ts = client.acknowledge(event["channel"], row["thread_ts"])
+        ack_ts = client.acknowledge(event["channel"], row["thread_ts"], event.get("reactor", ""))
     except Exception:
         store.update(event_id, ack_ts="unconfirmed", acknowledged_at=time.time(),
                      ack_error="slack_ack_outcome_unconfirmed_no_retry")
