@@ -21,16 +21,21 @@ def review_card(shadow_row, console_url=""):
     decision = guarded["decision"]
     reasons = guarded.get("policy_reasons") or []
     source = json.loads(shadow_row["bundle_json"]).get("source") or {}
+    review_required = bool(guarded.get("review_required"))
     lines = [
-        "Review needed: " + _clean(decision.get("title"), 180),
-        "Why now: " + _clean(decision.get("summary"), 500),
-        "Recommendation: " + _clean(decision.get("disposition"), 80).replace("_", " ") +
-        " - " + _clean(decision.get("next_step"), 500),
-        "Already completed: Evidence was reviewed and the disposition was evaluated. No gated action was taken.",
-        "Decision: open the thread and answer the short approval questions. Each answer is recorded before the next question appears.",
+        ("p-OPS review: " if review_required else "p-OPS complete: ") + _clean(decision.get("title"), 180),
+        "Disposition: " + _clean(decision.get("disposition"), 80).replace("_", " "),
+        "Priority: %s · Severity: %s · Confidence: %s" % (
+            _clean(decision.get("priority") or "not set", 40),
+            _clean(decision.get("severity") or "not set", 40),
+            _clean(decision.get("confidence") or "not set", 40)),
+        "Why: " + _clean(decision.get("summary"), 500),
+        "Next: " + _clean(decision.get("next_step"), 500),
+        "Completed: Evidence was reviewed and the disposition was evaluated. No gated action was taken.",
     ]
     if reasons:
-        lines.insert(3, "Review reason: " + _clean(", ".join(reasons), 500))
+        lines.insert(5, "Review reason: " + _clean(", ".join(reasons), 500))
+    lines.append("Your input: use the buttons below." if review_required else "No response needed unless you want to correct this disposition.")
     if source.get("url"):
         lines.append("Source: " + _clean(source["url"], 1000))
     bundle = json.loads(shadow_row["bundle_json"])
@@ -49,16 +54,20 @@ class ReviewNotificationLedger:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("""CREATE TABLE IF NOT EXISTS p_ops_review_notifications (
-                triage_id TEXT PRIMARY KEY, channel TEXT NOT NULL, content TEXT NOT NULL,
+                triage_id TEXT PRIMARY KEY, channel TEXT NOT NULL, thread_ts TEXT,
+                content TEXT NOT NULL,
                 content_hash TEXT NOT NULL, state TEXT NOT NULL, created REAL NOT NULL,
                 updated REAL NOT NULL, sent_at REAL, external_id TEXT, error TEXT)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(p_ops_review_notifications)")}
+            if "thread_ts" not in columns:
+                db.execute("ALTER TABLE p_ops_review_notifications ADD COLUMN thread_ts TEXT")
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=2)
         db.row_factory = sqlite3.Row
         return db
 
-    def queue(self, shadow_row, channel, console_url=""):
+    def queue(self, shadow_row, channel, console_url="", thread_ts=""):
         if not channel.strip():
             raise ValueError("The review notification channel is required.")
         content = review_card(shadow_row, console_url)
@@ -66,9 +75,9 @@ class ReviewNotificationLedger:
         now = time.time()
         with self.connect() as db:
             db.execute("""INSERT OR IGNORE INTO p_ops_review_notifications
-                (triage_id,channel,content,content_hash,state,created,updated)
-                VALUES (?,?,?,?,'queued',?,?)""",
-                (shadow_row["id"], channel, content, digest, now, now))
+                (triage_id,channel,thread_ts,content,content_hash,state,created,updated)
+                VALUES (?,?,?,?,?,'queued',?,?)""",
+                (shadow_row["id"], channel, thread_ts or None, content, digest, now, now))
 
     def rows(self, states=None):
         with self.connect() as db:

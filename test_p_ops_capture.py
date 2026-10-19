@@ -5,7 +5,8 @@ import tempfile
 import time
 import unittest
 
-from p_ops_capture import CaptureStore, REACTION, accept_reaction, receive, resolve_capture
+from p_ops_capture import (CaptureStore, REACTION, accept_capture, accept_mention, acknowledge_capture,
+                           accept_reaction, receive, resolve_capture)
 
 
 CFG = {"enabled": True, "team_id": "T1", "app_id": "A1", "secret": "secret",
@@ -20,10 +21,19 @@ def body(**event_changes):
 
 
 class FakeSlack:
+    def __init__(self): self.acks = []
     def message(self, channel, ts):
         return {"ts": ts, "thread_ts": "123.000", "user": "U2", "text": "Follow up with this partner"}
     def permalink(self, channel, ts):
         return "https://example.slack.com/archives/C1/p123456"
+    def thread(self, channel, ts, latest=""):
+        return [
+            {"ts": ts, "user": "U2", "text": "Follow up with this partner"},
+            {"ts": "123.456", "user": "U1", "text": "<@UBOT> what should we do next?"},
+        ]
+    def acknowledge(self, channel, thread_ts):
+        self.acks.append((channel, thread_ts))
+        return "124.000"
 
 
 class CaptureTests(unittest.TestCase):
@@ -41,13 +51,26 @@ class CaptureTests(unittest.TestCase):
         denied = dict(CFG, enabled=False)
         self.assertIsNone(accept_reaction(body(), denied))
 
+    def test_allowlisted_mention_captures_the_containing_thread(self):
+        mention = {"team_id": "T1", "api_app_id": "A1", "event_id": "EvM",
+                   "event": {"type": "app_mention", "channel": "C1", "user": "U1",
+                             "ts": "123.456", "thread_ts": "123.000",
+                             "text": "<@UBOT> evaluate this"}}
+        event = accept_mention(mention, CFG)
+        self.assertEqual("mention", event["trigger"])
+        self.assertEqual("123.000", event["ts"])
+        self.assertIsNotNone(accept_capture(mention, CFG))
+        mention["event"]["user"] = "U9"
+        self.assertIsNone(accept_mention(mention, CFG))
+
     def test_capture_is_idempotent_and_stores_source_evidence(self):
         event = accept_reaction(body(), CFG)
         self.assertTrue(self.store.enqueue(event))
         self.assertFalse(self.store.enqueue(event))
         self.assertEqual("captured", resolve_capture(self.store, "Ev1", FakeSlack()))
         row = self.store.get("Ev1")
-        self.assertEqual("Follow up with this partner", row["source_text"])
+        self.assertIn("Follow up with this partner", row["source_text"])
+        self.assertIn("what should we do next?", row["source_text"])
         self.assertEqual("123.000", row["thread_ts"])
 
     def test_resolution_failure_does_not_retry(self):
@@ -58,6 +81,14 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual("review", resolve_capture(self.store, "Ev1", Broken()))
         with self.assertRaises(ValueError):
             resolve_capture(self.store, "Ev1", FakeSlack())
+
+    def test_acknowledgement_is_posted_once_in_the_source_thread(self):
+        client = FakeSlack()
+        self.store.enqueue(accept_reaction(body(), CFG))
+        resolve_capture(self.store, "Ev1", client)
+        self.assertEqual("acknowledged", acknowledge_capture(self.store, "Ev1", client))
+        self.assertEqual("skipped", acknowledge_capture(self.store, "Ev1", client))
+        self.assertEqual([("C1", "123.000")], client.acks)
 
     def test_receiver_requires_valid_slack_signature(self):
         raw = json.dumps(body()).encode()

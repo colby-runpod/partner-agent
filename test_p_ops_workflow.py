@@ -94,6 +94,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(accept_action(wrong, CFG, self.ledger))
         self.assertIsNone(accept_action(click(self.flow_id, message_ts="999.1"), CFG, self.ledger))
 
+    def test_quick_yes_reply_advances_the_current_question(self):
+        client = FakeSlack()
+        process_flows(self.ledger, client)
+        body = {"type": "event_callback", "team_id": "T1", "api_app_id": "A1", "event_id": "EvYes",
+                "event": {"type": "message", "user": "U1", "channel": "C-REVIEW", "thread_ts": "100.1",
+                          "ts": "401.1", "text": "yes"}}
+        reply = accept_context_reply(body, CFG, self.ledger)
+        self.assertEqual("approved", reply["answer"])
+        self.ledger.enqueue(reply)
+        self.assertIn((self.flow_id, "next"), process_flows(self.ledger, client))
+        self.assertEqual("handoff", self.ledger.current_step(self.flow_id)["step_key"])
+
     def test_second_button_is_ignored_after_context_was_requested(self):
         client = FakeSlack()
         process_flows(self.ledger, client)

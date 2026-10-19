@@ -34,10 +34,11 @@ class NotificationTests(unittest.TestCase):
         row = shadow_row()
         row["bundle_json"] = json.dumps({"source": {"url": "https://slack.example/source"},
                                          "existing_tasks": [{"url": "https://notion.example/task"}]})
-        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example")
-        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example")
+        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example", "123.456")
+        self.ledger.queue(row, "C-APPROVED", "https://p-ops.example", "123.456")
         self.assertEqual(1, len(self.ledger.rows()))
         content = self.ledger.get("triage-1")["content"]
+        self.assertEqual("123.456", self.ledger.get("triage-1")["thread_ts"])
         self.assertIn("https://notion.example/task", content)
         self.assertIn("https://p-ops.example/review#approvals", content)
         calls = []

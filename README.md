@@ -16,7 +16,7 @@ The Partner Ops expansion is a deliberately isolated, disabled-by-default founda
 - [`p_ops.py`](p_ops.py) is a deterministic task-hygiene and Linear-routing planner. It previews evidence-bound status changes and never calls an external system.
 - [`p_ops_notion.json`](p_ops_notion.json) maps the planner to the live Working Tasks schema. The database now has a dedicated `Linear Issue` URL property.
 - [`p_ops_notion.py`](p_ops_notion.py) reads active Working Tasks, creates an idempotent SQLite preview and approval queue, and reconciles writes without blind retries.
-- [`p_ops_capture.py`](p_ops_capture.py) accepts only Colby's allowlisted Slack `:handshake::skin-tone-2:` reactions in allowlisted channels, verifies Slack signatures, and stores the exact reacted message as untrusted source evidence. It does not create a task or send a reply.
+- [`p_ops_capture.py`](p_ops_capture.py) accepts only Colby's allowlisted Slack `:handshake::skin-tone-2:` reactions or direct `@p-OPS Agent` mentions in allowlisted channels, verifies Slack signatures, and stores the source thread as untrusted evidence. It acknowledges the capture and returns the read-only disposition and approval questions in that same thread. It does not create a task or execute gated work.
 - [`p_ops_approval.py`](p_ops_approval.py) separates message drafting, exact-content approval, and explicit send authorization. Editing the content or destination invalidates approval. An uncertain send is held for review and is never retried automatically.
 - [`p_ops_linear.py`](p_ops_linear.py) drafts bounded Linear issues, searches by the source Notion URL before creation, and requires explicit approval plus a separate write gate. It cannot set priority, assignment, due dates, projects, or roadmap commitments.
 - [`p_ops_inbox.py`](p_ops_inbox.py) turns a verified Slack capture into a conservative, duplicate-checked Working Tasks Inbox proposal. The proposal must be reviewed before the separate Notion creation gate can execute it.
@@ -63,6 +63,7 @@ The current Slack chat service automatically posts answers. It is not the p-OPS 
 All new capabilities are off unless their individual gate is exactly `true`:
 
 - `P_OPS_CAPTURE_ENABLED` accepts Slack capture events. `P_OPS_CAPTURE_CHANNEL_IDS` and `P_OPS_CAPTURE_USER_IDS` are required comma-separated allowlists.
+- The p-OPS Slack app must subscribe to both `reaction_added` and `app_mention`. It also needs the applicable channel-history scope so it can read the source thread.
 - `P_OPS_NOTION_WRITE` permits approved Notion actions.
 - `P_OPS_NOTION_CREATE` permits an approved, duplicate-checked Inbox proposal to become a Working Task.
 - `P_OPS_LINEAR_WRITE` permits an approved Linear draft to be created after a duplicate search.

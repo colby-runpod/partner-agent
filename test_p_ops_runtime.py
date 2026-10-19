@@ -34,10 +34,14 @@ class FakeSlackApp:
 
 
 class FakeCaptureClient:
+    def __init__(self): self.acks = []
     def message(self, channel, ts):
         return {"ts": ts, "user": "U2", "text": "Prepare Redis follow-up"}
     def permalink(self, channel, ts):
         return "https://slack.example/source"
+    def acknowledge(self, channel, thread_ts):
+        self.acks.append((channel, thread_ts))
+        return "170.001"
 
 
 class FakeNotion:
@@ -282,7 +286,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(any(row[0] == "review_notification" for row in second))
         self.assertEqual(1, len(sender.rows))
         self.assertEqual("C-REVIEW", sender.rows[0]["channel"])
-        self.assertIn("Review needed:", sender.rows[0]["content"])
+        self.assertIn("p-OPS review:", sender.rows[0]["content"])
 
     def test_interactive_review_posts_only_the_first_question(self):
         cfg = dict(self.cfg, triage_shadow=True, review_posting=True,
@@ -302,6 +306,20 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("recommendation", step["step_key"])
         self.assertEqual("171.001", flow["thread_ts"])
         self.assertIn("p-ops.example/review#approvals", flow["links_json"])
+
+    def test_same_channel_capture_keeps_result_and_questions_in_source_thread(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=True,
+                   review_interactive=True, review_user_ids={"U1"}, review_channel="C1")
+        event = {"event_id": "EvThread", "team_id": "T1", "channel": "C1", "ts": "901.123",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        sender, approvals, capture_client = FakeReviewSender(), FakeApprovalClient(), FakeCaptureClient()
+        clients = {"slack_capture": capture_client, "notion": FakeNotion(), "triage": FakeTriage(),
+                   "review_sender": sender, "approval_client": approvals}
+        run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        self.assertEqual("901.123", sender.rows[0]["thread_ts"])
+        self.assertEqual("901.123", approvals.steps[0][0]["thread_ts"])
+        self.assertEqual([("C1", "901.123")], capture_client.acks)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ def proposal_from_capture(capture):
         raise ValueError("Only resolved captures can become task proposals.")
     source_url = capture["source_url"]
     source_text = capture["source_text"].strip()
+    event = json.loads(capture.get("payload") or "{}")
     fields = {
         "title": _clean_title(source_text),
         "status": "Inbox",
@@ -31,6 +32,8 @@ def proposal_from_capture(capture):
         "next_step": "Review the complete source, find related work, choose the correct disposition, and complete safe next actions.",
         "review_reason": "Captured from Slack and awaiting full multi-lens triage.",
         "source_url": source_url,
+        "source_channel": event.get("channel", ""),
+        "source_thread_ts": capture.get("thread_ts", ""),
     }
     return fields
 

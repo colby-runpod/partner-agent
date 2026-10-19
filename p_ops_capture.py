@@ -1,9 +1,9 @@
 """Slack reaction capture for p-OPS.
 
-Only an allowlisted user's :handshake::skin-tone-2: reaction on an allowlisted
-message is accepted. Captured Slack text is source evidence, never an
-instruction. This module queues evidence only; it does not create a task or
-post a Slack acknowledgement.
+Only an allowlisted user's :handshake::skin-tone-2: reaction or direct app
+mention in an allowlisted channel is accepted. Captured Slack text is source
+evidence, never an instruction. This module queues evidence only and posts a
+bounded capture acknowledgement; it does not create a task or execute work.
 """
 import json
 import os
@@ -13,7 +13,7 @@ import sqlite3
 import time
 import urllib.parse
 
-from intake import api, verify
+from intake import api, flatten, verify
 
 
 REACTION = "handshake::skin-tone-2"
@@ -55,7 +55,32 @@ def accept_reaction(body, cfg):
         return None
     return {"event_id": body["event_id"], "team_id": body["team_id"],
             "channel": item["channel"], "ts": item["ts"], "reactor": event["user"],
-            "reaction": REACTION, "event_time": event.get("event_ts", "")}
+            "reaction": REACTION, "trigger": "reaction", "event_time": event.get("event_ts", "")}
+
+
+def accept_mention(body, cfg):
+    """Turn an allowlisted @mention into a capture of its containing thread."""
+    if not cfg.get("enabled"):
+        return None
+    if body.get("team_id") != cfg["team_id"] or body.get("api_app_id") != cfg["app_id"]:
+        return None
+    event = body.get("event") or {}
+    if (event.get("type") != "app_mention" or event.get("subtype") or event.get("bot_id") or
+            event.get("user") not in cfg["user_ids"] or event.get("channel") not in cfg["channel_ids"]):
+        return None
+    ts = str(event.get("ts", ""))
+    thread_ts = str(event.get("thread_ts") or ts)
+    if (not body.get("event_id") or not re.fullmatch(r"\d+\.\d+", ts) or
+            not re.fullmatch(r"\d+\.\d+", thread_ts)):
+        return None
+    return {"event_id": body["event_id"], "team_id": body["team_id"],
+            "channel": event["channel"], "ts": thread_ts, "event_ts": ts,
+            "thread_ts": thread_ts, "reactor": event["user"], "trigger": "mention",
+            "request_text": flatten(event)[:4000], "event_time": event.get("event_ts", "")}
+
+
+def accept_capture(body, cfg):
+    return accept_reaction(body, cfg) or accept_mention(body, cfg)
 
 
 class CaptureStore:
@@ -68,7 +93,11 @@ class CaptureStore:
                 event_id TEXT PRIMARY KEY, source_key TEXT UNIQUE NOT NULL, payload TEXT NOT NULL,
                 state TEXT NOT NULL, created REAL NOT NULL, captured_at REAL,
                 source_url TEXT, source_text TEXT, source_user TEXT, thread_ts TEXT,
-                error TEXT)""")
+                ack_ts TEXT, acknowledged_at REAL, ack_error TEXT, error TEXT)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(p_ops_captures)")}
+            for name, kind in (("ack_ts", "TEXT"), ("acknowledged_at", "REAL"), ("ack_error", "TEXT")):
+                if name not in columns:
+                    db.execute("ALTER TABLE p_ops_captures ADD COLUMN %s %s" % (name, kind))
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=2)
@@ -76,7 +105,9 @@ class CaptureStore:
         return db
 
     def enqueue(self, event):
-        source_key = ":".join((event["team_id"], event["channel"], event["ts"], event["reactor"], REACTION))
+        # A mention and a later reaction on the same source should not create two
+        # evaluations for the same reviewer.
+        source_key = ":".join((event["team_id"], event["channel"], event["ts"], event["reactor"]))
         with self.connect() as db:
             return db.execute("""INSERT OR IGNORE INTO p_ops_captures
                 (event_id,source_key,payload,state,created) VALUES (?,?,?,'pending',?)""",
@@ -98,7 +129,8 @@ class CaptureStore:
         return [dict(row) for row in rows]
 
     def update(self, event_id, **fields):
-        allowed = {"state", "captured_at", "source_url", "source_text", "source_user", "thread_ts", "error"}
+        allowed = {"state", "captured_at", "source_url", "source_text", "source_user", "thread_ts",
+                   "ack_ts", "acknowledged_at", "ack_error", "error"}
         if not fields.keys() <= allowed:
             raise ValueError("Unsupported capture field.")
         with self.connect() as db:
@@ -124,6 +156,50 @@ class SlackCaptureClient:
         params = urllib.parse.urlencode({"channel": channel, "message_ts": ts})
         return api("https://slack.com/api/chat.getPermalink?" + params, self.token)["permalink"]
 
+    def thread(self, channel, thread_ts, latest=""):
+        params = {"channel": channel, "ts": thread_ts, "limit": 100}
+        if latest:
+            params.update({"latest": latest, "inclusive": "true"})
+        result = api("https://slack.com/api/conversations.replies?" + urllib.parse.urlencode(params), self.token)
+        messages = result.get("messages") or []
+        if not messages or messages[0].get("ts") != thread_ts:
+            raise ValueError("Slack did not return the complete source thread.")
+        return messages
+
+    def acknowledge(self, channel, thread_ts):
+        result = api("https://slack.com/api/chat.postMessage", self.token, {
+            "channel": channel, "thread_ts": thread_ts,
+            "text": ("Captured. I’m reviewing the thread, checking related Working Tasks, and deciding "
+                     "whether this should be advanced, merged, routed, held, or closed. I’ll post the result here."),
+            "mrkdwn": False, "parse": "none", "unfurl_links": False, "unfurl_media": False})
+        if not result.get("ts"):
+            raise ValueError("Slack did not confirm capture acknowledgement.")
+        return result["ts"]
+
+
+def acknowledge_capture(store, event_id, client):
+    row = store.get(event_id)
+    if not row or row["state"] != "captured" or row.get("ack_ts"):
+        return "skipped"
+    event = json.loads(row["payload"])
+    try:
+        ack_ts = client.acknowledge(event["channel"], row["thread_ts"])
+    except Exception:
+        store.update(event_id, ack_ts="unconfirmed", acknowledged_at=time.time(),
+                     ack_error="slack_ack_outcome_unconfirmed_no_retry")
+        return "review"
+    store.update(event_id, ack_ts=ack_ts, acknowledged_at=time.time(), ack_error=None)
+    return "acknowledged"
+
+
+def _thread_text(messages):
+    lines = []
+    for message in messages:
+        text = flatten(message).strip()
+        if text:
+            lines.append("[%s] %s" % (message.get("user") or message.get("bot_id") or "app", text))
+    return "\n".join(lines)[:12000]
+
 
 def resolve_capture(store, event_id, client):
     row = store.get(event_id)
@@ -137,13 +213,20 @@ def resolve_capture(store, event_id, client):
     except Exception:
         store.update(event_id, state="review", error="source_resolution_failed_no_retry")
         return "review"
+    thread_ts = message.get("thread_ts") or event.get("thread_ts") or message["ts"]
     text = message.get("text") or ""
+    try:
+        messages = client.thread(event["channel"], thread_ts, event.get("event_ts", ""))
+    except (AttributeError, ValueError, KeyError):
+        messages = []
+    if messages:
+        text = _thread_text(messages)
     if not text.strip():
         store.update(event_id, state="review", error="captured_message_has_no_text")
         return "review"
     store.update(event_id, state="captured", captured_at=time.time(), source_url=url,
                  source_text=text, source_user=message.get("user") or message.get("bot_id") or "",
-                 thread_ts=message.get("thread_ts") or message["ts"], error=None)
+                 thread_ts=thread_ts, error=None)
     return "captured"
 
 
@@ -155,5 +238,5 @@ def receive(raw_body, timestamp, signature, cfg, store):
         body = json.loads(raw_body)
     except (ValueError, TypeError):
         return False
-    event = accept_reaction(body, cfg)
+    event = accept_capture(body, cfg)
     return bool(event and store.enqueue(event))

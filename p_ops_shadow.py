@@ -75,7 +75,9 @@ def bundle_from_inbox(row, pages, current_date=None):
     deadlines = sorted(set(re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", source_text)))
     return {
         "source": {"id": "capture:" + row["capture_id"], "type": "slack_capture",
-                   "url": proposal.get("source_url", ""), "text": source_text[:12000]},
+                   "url": proposal.get("source_url", ""), "text": source_text[:12000],
+                   "channel": proposal.get("source_channel", ""),
+                   "thread_ts": proposal.get("source_thread_ts", "")},
         "existing_tasks": tasks,
         "meetings": [],
         "objectives": [{"id": value} for value in objective_ids],

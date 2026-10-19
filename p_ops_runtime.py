@@ -19,7 +19,8 @@ from zoneinfo import ZoneInfo
 
 from intake import Application, api, verify
 from p_ops_approval import ApprovalLedger, send_message
-from p_ops_capture import CaptureStore, SlackCaptureClient, accept_reaction, load_capture_config, resolve_capture
+from p_ops_capture import (CaptureStore, SlackCaptureClient, accept_capture, acknowledge_capture,
+                           load_capture_config, resolve_capture)
 from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, RemoteError, apply_ready, preview
@@ -389,7 +390,8 @@ class SlackReviewSender:
             raise ValueError("Review notification destination is not authorized.")
         result = api("https://slack.com/api/chat.postMessage", self.token, {
             "channel": self.expected_channel, "text": row["content"], "mrkdwn": False,
-            "parse": "none", "unfurl_links": False, "unfurl_media": False})
+            "parse": "none", "unfurl_links": False, "unfurl_media": False,
+            **({"thread_ts": row["thread_ts"]} if row.get("thread_ts") else {})})
         if not result.get("ts"):
             raise ValueError("Slack did not confirm review notification delivery.")
         return result["ts"]
@@ -960,7 +962,7 @@ class RuntimeApp:
             if body.get("type") == "url_verification":
                 return respond("200 OK", {"challenge": body.get("challenge", "")})
             if body.get("type") == "event_callback":
-                capture = accept_reaction(body, self.cfg)
+                capture = accept_capture(body, self.cfg)
                 if capture:
                     self.dashboard.capture.enqueue(capture)
                 context = accept_context_reply(body, self.cfg, self.approval_flows)
@@ -1105,7 +1107,7 @@ def create_app():
     cfg = config()
     capture, inbox, messages, linear, notion, triage = components(cfg)
     dashboard = Dashboard(cfg, capture, inbox, messages, linear, notion, triage)
-    slack_app = Application(cfg, capture, accept_reaction)
+    slack_app = Application(cfg, capture, accept_capture)
     return RuntimeApp(cfg, dashboard, slack_app)
 
 
@@ -1115,7 +1117,15 @@ def run_once(cfg, stores, clients=None, today=None):
     results = []
     for row in capture.rows(("pending",))[:10]:
         client = clients.get("slack_capture") or SlackCaptureClient()
-        results.append(("capture", row["event_id"], resolve_capture(capture, row["event_id"], client)))
+        state = resolve_capture(capture, row["event_id"], client)
+        results.append(("capture", row["event_id"], state))
+        if state == "captured" and cfg.get("review_posting"):
+            results.append(("capture_ack", row["event_id"], acknowledge_capture(capture, row["event_id"], client)))
+    if cfg.get("review_posting"):
+        client = clients.get("slack_capture") or SlackCaptureClient()
+        for row in capture.rows(("captured",)):
+            if not row.get("ack_ts"):
+                results.append(("capture_ack", row["event_id"], acknowledge_capture(capture, row["event_id"], client)))
     for row in capture.rows(("captured",)):
         inbox.propose(row)
     if cfg.get("triage_shadow"):
@@ -1129,8 +1139,11 @@ def run_once(cfg, stores, clients=None, today=None):
                 continue
             row = triage_ledger.get(item_id)
             guarded = json.loads(row["decision_json"])
-            if guarded.get("review_required") and cfg.get("review_channel"):
-                notifications.queue(row, cfg.get("review_channel", ""), cfg.get("public_url", ""))
+            if cfg.get("review_channel"):
+                source = json.loads(row["bundle_json"]).get("source") or {}
+                channel = source.get("channel") if source.get("channel") == cfg.get("review_channel") else cfg.get("review_channel", "")
+                thread_ts = source.get("thread_ts") if channel == source.get("channel") else ""
+                notifications.queue(row, channel, cfg.get("public_url", ""), thread_ts)
         if cfg.get("review_posting"):
             sender = clients.get("review_sender") or SlackReviewSender(cfg["review_channel"])
             for row in notifications.rows(("queued",)):
@@ -1143,7 +1156,10 @@ def run_once(cfg, stores, clients=None, today=None):
                     shadow_row = triage_ledger.get(notice["triage_id"])
                 except KeyError:
                     continue
-                flows.create(shadow_row, cfg["review_channel"], notice["external_id"], cfg.get("public_url", ""))
+                guarded = json.loads(shadow_row["decision_json"])
+                if guarded.get("review_required"):
+                    flows.create(shadow_row, cfg["review_channel"],
+                                 notice.get("thread_ts") or notice["external_id"], cfg.get("public_url", ""))
             approval_client = clients.get("approval_client") or SlackApprovalClient(cfg["review_channel"])
             results.extend(("approval_flow", flow_id, state)
                            for flow_id, state in process_flows(flows, approval_client))

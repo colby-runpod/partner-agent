@@ -129,11 +129,13 @@ class ApprovalFlowLedger:
             raise KeyError(flow_id)
         return dict(row)
 
-    def by_thread(self, channel, thread_ts):
+    def by_thread(self, channel, thread_ts, states=("awaiting_context",)):
+        marks = ",".join("?" for _ in states)
         with self.connect() as db:
             row = db.execute("""SELECT * FROM p_ops_approval_flows
-                WHERE channel=? AND thread_ts=? AND state='awaiting_context'""",
-                (channel, thread_ts)).fetchone()
+                WHERE channel=? AND thread_ts=? AND state IN (%s)
+                ORDER BY created DESC LIMIT 1""" % marks,
+                (channel, thread_ts, *states)).fetchone()
         return dict(row) if row else None
 
     def current_step(self, flow_id):
@@ -283,13 +285,25 @@ def accept_context_reply(body, cfg, ledger):
             not re.fullmatch(r"\d+\.\d+", thread_ts) or not re.fullmatch(r"\d+\.\d+", ts)):
         return None
     note = str(event.get("text", "")).strip()
-    flow = ledger.by_thread(channel, thread_ts)
+    flow = ledger.by_thread(channel, thread_ts, ("awaiting_answer", "awaiting_context"))
     if not flow or not note or len(note) > 2000:
         return None
     step = ledger.current_step(flow["id"])
+    if flow["state"] == "awaiting_answer":
+        answer = {
+            "yes": "approved", "y": "approved", "approve": "approved", "approved": "approved",
+            "go": "approved", "proceed": "approved", "no": "declined", "n": "declined",
+            "decline": "declined", "stop": "declined", "hold": "held", "pause": "held",
+            "later": "held",
+        }.get(note.lower().strip(" .!"))
+        if not answer:
+            return None
+        return {"event_id": "reply:" + str(body.get("event_id") or ts), "flow_id": flow["id"],
+                "step_key": step["step_key"], "kind": "button", "answer": answer, "user_id": user,
+                "channel": channel, "message_ts": step.get("message_ts") or ts, "note": ""}
     return {"event_id": "context:" + str(body.get("event_id") or ts), "flow_id": flow["id"],
             "step_key": step["step_key"], "kind": "context", "answer": "approved", "user_id": user,
-            "channel": channel, "message_ts": ts, "note": note}
+            "channel": channel, "message_ts": step.get("message_ts") or ts, "note": note}
 
 
 def receive_interaction(env, start, cfg, ledger):
@@ -323,6 +337,8 @@ def step_blocks(flow, step):
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": "*%d. %s*\n%s" %
             (number, step["prompt"], step["context"]), "verbatim": True}},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": "Click a button or reply `yes`, `no`, or `hold`.", "verbatim": True}]},
     ]
     if link_text:
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": link_text, "verbatim": True}]})

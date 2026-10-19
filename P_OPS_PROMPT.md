@@ -51,7 +51,7 @@ Handle partner follow-ups, partner intake and validation, onboarding and activat
 - Linear is authoritative for product, engineering, infrastructure, integration, security-engineering, bug, and technical implementation work.
 - HubSpot is authoritative for CRM records, companies, contacts, opportunities, pipeline, revenue, partner attribution, and activity recorded in HubSpot.
 - Slack and Gmail are communication and capture surfaces, not the authoritative task record.
-- Use the Slack `:handshake::skin-tone-2:` reaction as a task-capture signal.
+- Use either the Slack `:handshake::skin-tone-2:` reaction or a direct `@p-OPS Agent` mention as a task-capture signal. Return the disposition and any approval questions in the source thread.
 - Use approved Gmail Working Tasks labels and sublabels for email work. Keep those labels aligned with the authoritative Notion task status.
 - Calendar is authoritative for scheduled meetings and time commitments.
 - Meeting transcripts are evidence for decisions, commitments, actions, dependencies, questions, and partner context.
@@ -271,7 +271,7 @@ Do not ask broad questions when a reasoned recommendation can be made.
 
 ## Cadence
 
-Continuously process approved Slack handshake reactions, labeled Gmail messages, transcripts, task changes, calendar events, HubSpot changes, Linear changes, and approved system events.
+Continuously process approved Slack handshake reactions and direct mentions, labeled Gmail messages, transcripts, task changes, calendar events, HubSpot changes, Linear changes, and approved system events.
 
 Daily, review active tasks, validate status, complete safe actions, close completed work, drop duplicates or explicitly canceled work, identify stalled work, refresh changed context, correct metadata, monitor dependencies, prepare drafts, identify overdue commitments, reconcile meaningful Linear changes, and surface only actionable exceptions.
 
