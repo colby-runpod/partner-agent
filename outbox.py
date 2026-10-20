@@ -18,7 +18,7 @@ INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 COLBY = 'U0BEHPEJA6L'
 NOTION_COLBY = '38dd872b-594c-8152-9d06-0002630c4d98'
 BOT = 'U0C7372ET45'
-CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL'}
+CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T'}
 ACTIONS = {'outbox_approve': 'Approve', 'outbox_decline': 'Decline', 'outbox_call': 'Call first'}
 KINDS = {'supply_lead', 'event_request', 'priority_alert', 'daily_digest', 'invitation_queue', 'other'}
 
