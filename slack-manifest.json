@@ -1,11 +1,11 @@
 {
   "display_information": {
-    "name": "Partner Agent",
+    "name": "Team Partner Agent",
     "description": "Capture Runpod partnership requests in Notion"
   },
   "features": {
     "bot_user": {
-      "display_name": "Partner Agent",
+      "display_name": "Team Partner Agent",
       "always_online": false
     }
   },
@@ -17,7 +17,8 @@
         "chat:write",
         "app_mentions:read",
         "reactions:read",
-        "reactions:write"
+        "reactions:write",
+        "users:read"
       ]
     }
   },
