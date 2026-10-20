@@ -52,6 +52,32 @@ class OutboxTests(unittest.TestCase):
     def setup_box(self,pages):
         self.remote=Remote(pages); self.box=o.Outbox(self.temp.name+'/ledger.db',self.remote); return self.box
     def posts(self): return [p for method,p in self.remote.calls if method=='chat.postMessage']
+    def test_test_ids_leave_real_queue_untouched(self):
+        real, test = page(1), page(2)
+        with patch.dict(os.environ, OUTBOX_TEST_IDS=test['id']):
+            self.setup_box([real,test]).poll()
+            self.box.poll()
+        self.assertEqual(len(self.posts()),1)
+        self.assertEqual(self.remote.pages[real['id']],real)
+        self.assertEqual({id for id,_ in self.remote.writes},{test['id']})
+
+    def test_invalid_test_ids_fail_closed(self):
+        for value in ('', 'not-a-page', page()['id']+','):
+            with patch.dict(os.environ, OUTBOX_TEST_IDS=value):
+                with self.assertRaises(ValueError): self.setup_box([page()])
+
+    def test_test_ids_block_previous_receipts_and_pickup(self):
+        real, test = page(1), page(2)
+        self.setup_box([real,test]).poll()
+        event=self.event(real)
+        self.remote.writes=[]; self.remote.calls=[]
+        with patch.dict(os.environ, OUTBOX_TEST_IDS=test['id']):
+            box=o.Outbox(self.box.path,self.remote)
+            box.sync(box.get(real['id']))
+            box.event(event)
+        self.assertEqual(self.remote.writes,[])
+        self.assertFalse(any(m.startswith('chat.') for m,_ in self.remote.calls))
+
     def test_thirteen_rows_threaded_once_across_restart(self):
         pages=[page(1,'invitation_queue','C0C7HG8KYFL')]
         for n in range(2,12):

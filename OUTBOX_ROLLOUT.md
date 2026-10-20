@@ -45,3 +45,7 @@ Rollback: set OUTBOX_ENABLED=false. Existing digest reviews continue; queued row
 
 - https://docs.slack.dev/reference/methods/chat.postMessage/
 - https://developers.notion.com/reference/filter-data-source-entries
+
+## Isolated live acceptance
+
+Before enabling the worker, set `OUTBOX_TEST_IDS` to a comma-separated list of the exact Notion outbox page UUIDs approved for the test. All other rows remain untouched, including pending receipt writes and pickup callbacks. An empty or malformed value prevents startup. Do not remove this variable until the real queue rollout is authorized. Leave `SCREENING_V2_ENABLED` off during transport acceptance.

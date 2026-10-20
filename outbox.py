@@ -123,10 +123,15 @@ class Remote:
 class Outbox:
     def __init__(self, path, remote=None):
         self.path=path; self.remote=remote or Remote(); self.verified=False
+        raw = os.environ.get('OUTBOX_TEST_IDS')
+        self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
+        # A present but empty/malformed restriction fails closed during startup.
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS outbox_delivery (id TEXT PRIMARY KEY, snapshot TEXT NOT NULL, state TEXT NOT NULL, ts TEXT, decision TEXT, actor TEXT, at TEXT, error TEXT)')
             db.execute('CREATE INDEX IF NOT EXISTS outbox_ts ON outbox_delivery(ts)')
             db.execute('CREATE TABLE IF NOT EXISTS outbox_events (key TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
+    def selected(self, id):
+        return self.test_ids is None or str(uuid.UUID(id)) in self.test_ids
     def verify(self):
         if not self.verified:
             identity = self.remote.slack('auth.test', {})
@@ -144,6 +149,7 @@ class Outbox:
         with self.db() as db:
             db.execute('UPDATE outbox_delivery SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',[*fields.values(),id])
     def sync(self,d):
+        if not self.selected(d['id']): return
         r=json.loads(d['snapshot']); ts=d['ts']
         if not ts: return
         current=self.remote.get(r['id'])
@@ -197,6 +203,7 @@ class Outbox:
             except Exception:
                 print('Outbox row processing failed; retained for reconciliation.',flush=True)
     def post(self,page):
+        if not self.selected(page['id']): return
         self.verify()
         r=row(page)
         if page.get('archived') or page.get('in_trash') or r['status']!='Queued': return
@@ -260,7 +267,7 @@ class Outbox:
         with self.db() as db:
             matches=[dict(x) for x in db.execute('SELECT * FROM outbox_delivery WHERE ts=?',(e['message_ts'],))]
         d=next((x for x in matches if json.loads(x['snapshot'])['channel']==e['channel']),None)
-        if not d or d['decision']: return
+        if not d or d['decision'] or not self.selected(d['id']): return
         r=json.loads(d['snapshot'])
         status = prop(self.remote.get(r['id']),'Status')
         if status == 'Queued' and d['state'] == 'sync':
