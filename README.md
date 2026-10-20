@@ -128,3 +128,9 @@ The planned runtime is a small hosted Python application. Reusing Dan's existing
 - [OpenAI Agents SDK quickstart](https://developers.openai.com/api/docs/guides/agents/quickstart)
 - [Notion page retrieval](https://developers.notion.com/reference/retrieve-a-page)
 - [Slack application quickstart](https://docs.slack.dev/quickstart/)
+
+## Partner intake outbox (optional)
+
+Team Partner Agent can deliver the scheduled intake pipeline's Notion outbox into the three approved shared channels, track pickup, and record Colby's invitation decisions. It uses the existing Python service and durable SQLite volume, with a separate supervised worker; p-OPS and PartnerOS do not change.
+
+Read [OUTBOX_ROLLOUT.md](OUTBOX_ROLLOUT.md) before enabling `OUTBOX_ENABLED=true`. This drains all due queued messages. The flag is off by default; existing digest reviews and buttons are preserved. [INBOUND_SCREENING_POLICY.md](INBOUND_SCREENING_POLICY.md) covers the separate scheduled pipeline update and the optional `SCREENING_V2_ENABLED` advisory reviewer. Neither feature sends prospect emails.

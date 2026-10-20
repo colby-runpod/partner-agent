@@ -43,6 +43,8 @@ import urllib.parse
 import urllib.request
 
 import assistant
+import outbox
+import screening
 import chat
 import tasks
 from intake import Application, Store, api, flatten, verify
@@ -174,6 +176,28 @@ Return exactly this JSON shape:
  "dean_motion": "", "risks": [""], "sources": [{"title": "", "url": "https://..."}]}''' % (
     ', '.join(TYPES), ', '.join(ROUTES))
 
+SCREENING_INSTRUCTIONS = '''
+Additional screening v2 fields supersede older scoring implications, not the existing JSON fields.
+Add a screening object with scores {A,S,I,C,V} as integers 0-3:
+A ask: 0 blank/boilerplate, 1 generic, 2 specific motion, 3 named customer/deal/volume or built integration.
+S substance: 0 no evidence/mismatched domain, 1 own site/GitHub only or unknown small software firm,
+2 one independent source, 3 several independent sources/funding/named customers/cloud-partner listing.
+I identity: 0 unverified/mismatch, 1 own-domain contact, 2 verified person/role, 3 verified senior authority.
+C commercial: 0 none, 1 vague claims, 2 quantified volume/client base/capacity or live Runpod product,
+3 live customer deal/committed capacity or timeline under 90 days.
+V strategic value: 0 none, 1 ordinary fit, 2 concrete integration/user-base/distribution, 3 major strategic value.
+Also include risk (none, policy_review, misrepresentation, spam), risk_evidence (specific finding;
+never a country alone), wrong_door (empty, vendor, sales, credits, startup, affiliate, subscale_supply),
+predevelopment_supply (boolean), blank_payload (boolean), hubspot_checked (false; no HubSpot tool here),
+own_domain (boolean: verified match, never inferred solely from identity score), teammate_referred,
+unverifiable (boolean), research {registry, linkedin, directories, press, gmail} with actual results.
+Gmail is unavailable in this service: state unavailable, never claim to have searched it.
+Company's own claims and empty search results are not independent verification. Real small software
+firms with an empty search remain S=1. A missing digest requires source-form review. Supply with no
+secured site/power stays predevelopment. Cite actual prior submission dates, not guessed dates.
+Probe asks: 1-3 specific questions. No outbound send and no individual alert for Qualify.
+'''
+
 
 def _ids(name, default=''):
     return set(filter(None, os.environ.get(name, default).split(',')))
@@ -181,6 +205,10 @@ def _ids(name, default=''):
 
 def config():
     cfg = chat.config()  # Slack signing settings; cfg['enabled'] reflects CHAT_ENABLED.
+    cfg['screening_v2'] = os.environ.get('SCREENING_V2_ENABLED') == 'true'
+    cfg['outbox_enabled'] = os.environ.get('OUTBOX_ENABLED') == 'true'
+    if cfg['outbox_enabled'] and not os.environ.get('NOTION_TOKEN'):
+        raise ValueError('OUTBOX_ENABLED requires NOTION_TOKEN')
     cfg['chat_enabled'] = cfg['enabled']
     cfg['review_enabled'] = os.environ.get('REVIEW_ENABLED') == 'true'
     cfg['review_channels'] = _ids('REVIEW_CHANNEL_IDS', 'C0BQKEQLSKH')
@@ -302,7 +330,7 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg) or \
+    event = outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg) or \
         assistant.accept_agent(body, cfg)
     if event:
         return event
@@ -328,6 +356,8 @@ def create_app():
                                'tasks_enabled': cfg.get('tasks_enabled', False),
                                'agent_enabled': cfg.get('agent_enabled', False),
                                'slack_user_token': bool(os.environ.get('SLACK_USER_TOKEN')),
+                               'outbox_enabled': cfg.get('outbox_enabled', False),
+                               'screening_v2_enabled': cfg.get('screening_v2', False),
                                'intake_enabled': False}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
@@ -350,7 +380,7 @@ def interactions(env, start, cfg, store):
         if not verify(cfg['secret'], env.get('HTTP_X_SLACK_REQUEST_TIMESTAMP'), env.get('HTTP_X_SLACK_SIGNATURE'), raw):
             return respond('401 Unauthorized')
         payload = json.loads(urllib.parse.parse_qs(raw.decode())['payload'][0])
-        event = accept_action(payload, cfg) or tasks.accept_task_action(payload, cfg)
+        event = outbox.action(payload, cfg) or accept_action(payload, cfg) or tasks.accept_task_action(payload, cfg)
         if event:
             store.enqueue(event)
         return respond('200 OK')
@@ -495,7 +525,7 @@ def decide(checks, signals, route):
     return score, 'do_not_pursue'
 
 
-def parse(raw):
+def parse(raw, screening_v2=False):
     start, end = raw.find('{'), raw.rfind('}')
     if start < 0 or end <= start:
         raise ValueError('No review JSON')
@@ -532,6 +562,13 @@ def parse(raw):
         url = str(source.get('url', '')) if isinstance(source, dict) else ''
         if URL.fullmatch(url):
             review['sources'].append((url, _clean(source.get('title'), 70) or 'source'))
+    if screening_v2:
+        facts = data.get('screening', {})
+        if not isinstance(facts, dict):
+            raise ValueError('Missing screening evidence')
+        facts['hubspot_checked'] = False
+        facts['research'] = dict(facts.get('research') or {}, gmail='unavailable: no Gmail research connector')
+        screening.apply(review, facts)
     return review
 
 
@@ -555,6 +592,16 @@ def drafts(review, email, submitted):
     """Copy-ready text for the card. Returns a list of (label, text)."""
     fill = {'first': review['first_name'], 'company': review['company_short']}
     route, decision, v = review['route'], review['decision'], {n: c[0] for n, c in review['checks'].items()}
+    if review.get('screening'):
+        tier = review['screening']['tier']
+        if tier in ('Hold for Colby', 'Needs research'):
+            return []
+        if tier == 'Qualify':
+            return [('Probe reply', PROBE.format(ask=review['probe_ask'], **fill))] if review['probe_ask'] else []
+        if tier == 'DQ':
+            return [('Decline', 'Draft only, eligible from %s: Thanks for reaching out. We are not moving forward right now. Please reconnect with volume, named customers, a launch date, or secured site/power/hardware.' % (submitted + dt.timedelta(days=7)).strftime('%Y-%m-%d'))]
+        if tier == 'Route':
+            return [('Internal routing', review['next_step'])]
     if decision == 'redirect':
         template = POINTER_STARTUP if route == 'Startup Program' else POINTER_CREATOR
         return [('Pointer reply', template.format(**fill))]
@@ -617,6 +664,9 @@ def render(review, history=None, draft_list=()):
                                      else 'referral and affiliate program')
     else:
         step = review['next_step']
+    if review.get('screening'):
+        lines += ['', '*' + screening.notes(review['screening']) + '*']
+        step = review['next_step']
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
         lines.append(':octagonal_sign: *Clear first:* ' + review['signals']['blocker'])
@@ -673,7 +723,7 @@ class Ledger:
             if review:
                 keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
                                                'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
-                                               'next_step', 'headline')}
+                                               'next_step', 'headline', 'screening')}
                 keep['checks'] = r.get('checks', {})
                 keep['drafts'] = [list(d) for d in r.get('drafts', [])]
                 keep['blocker'] = (r.get('signals') or {}).get('blocker', '')
@@ -796,9 +846,12 @@ class ReviewClients:
         context = history if isinstance(history, dict) else (history or 'not_configured')
         messages = [{'role': 'user', 'content': json.dumps({'hubspot_digest': event['text'],
                                                            'notion_history': context})}]
+        system = INSTRUCTIONS
+        if self.cfg.get('screening_v2'):
+            system += SCREENING_INSTRUCTIONS
         # The instructions are identical on every call, so cache them.
         payload = {'model': os.environ['ANTHROPIC_MODEL'], 'max_tokens': 3000, 'messages': messages,
-                   'system': [{'type': 'text', 'text': INSTRUCTIONS, 'cache_control': {'type': 'ephemeral'}}]}
+                   'system': [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}]}
         if self.cfg['web_search']:
             payload['tools'] = [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 5}]
         for _ in range(4):  # Web search can pause a long turn; continue it a bounded number of times.
@@ -811,7 +864,7 @@ class ReviewClients:
             raise ValueError('Incomplete Claude response')
         # Web search splits answers into cited text blocks; join without separators.
         text = ''.join(c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text')
-        result = parse(text)
+        result = parse(text, screening_v2=self.cfg.get('screening_v2', False))
         email, _ = digest_fields(event['text'])
         submitted = dt.datetime.utcfromtimestamp(float(event['thread_ts']))
         result['drafts'] = drafts(result, email, submitted)
@@ -1086,6 +1139,8 @@ class NotionWriter:
             verdict, note = (checks.get(name) or ['unverified', ''])[:2]
             notes.append('**%s:** %s%s' % (name.upper(), verdict, (' - ' + html.unescape(note)) if note else ''))
         notes.append('**SCORE:** %s. Decision: %s.' % (score, LABELS.get(decision, decision)))
+        if data.get('screening'):
+            notes.append(screening.notes(data['screening']))
         if data.get('blocker'):
             notes.append('**CLEAR FIRST:** ' + html.unescape(data['blocker']))
         step = {'do_not_pursue': 'No action', 'redirect': 'Point to resource'}.get(decision) or (
@@ -1351,12 +1406,21 @@ def worker():
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
         agent_writer = task_writer if cfg.get('tasks_enabled') else None
+        delivery = outbox.Outbox(store.path) if cfg.get('outbox_enabled') else None
         while True:
             job = store.next_job()
             if not job:
                 if cfg['review_enabled']:
                     run_summary(cfg, ledger, review_clients)
                 time.sleep(0.5)
+            elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action'):
+                try:
+                    if delivery:
+                        delivery.enqueue_event(json.loads(job['payload']))
+                    store.update(job['key'], state='done')
+                except Exception:
+                    # Accepted decisions are durable and reconciled by the next poll.
+                    store.update(job['key'], state='failed', error='Outbox event failed; inspect delivery ledger')
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'feedback':
