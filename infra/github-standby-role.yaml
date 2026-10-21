@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub main branch deployment role for the existing partner agent AWS standby
+Resources:
+  GitHubProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: partner-agent-github-standby
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: repo:colby-runpod/partner-agent:ref:refs/heads/main
+      Policies:
+        - PolicyName: ExistingStandbyDeployment
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:DescribeImages
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/team-partner-agent
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateExpressGatewayService
+                  - ecs:DescribeExpressGatewayService
+                  - ecs:DescribeServices
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/default/team-partner-agent-a223
+              - Effect: Allow
+                Action: ecs:DescribeTaskDefinition
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/ecsTaskExecutionRole
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/ecsInfrastructureRoleForExpressServices
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: [ecs.amazonaws.com, ecs-tasks.amazonaws.com]
+Outputs:
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn
