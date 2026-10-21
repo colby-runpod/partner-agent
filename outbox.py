@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+from outbox_store import SQLiteOutboxStore
 import urllib.request
 import urllib.error
 import uuid
@@ -126,10 +127,7 @@ class Outbox:
         raw = os.environ.get('OUTBOX_TEST_IDS')
         self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
         # A present but empty/malformed restriction fails closed during startup.
-        with self.db() as db:
-            db.execute('CREATE TABLE IF NOT EXISTS outbox_delivery (id TEXT PRIMARY KEY, snapshot TEXT NOT NULL, state TEXT NOT NULL, ts TEXT, decision TEXT, actor TEXT, at TEXT, error TEXT)')
-            db.execute('CREATE INDEX IF NOT EXISTS outbox_ts ON outbox_delivery(ts)')
-            db.execute('CREATE TABLE IF NOT EXISTS outbox_events (key TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
+        self.store = SQLiteOutboxStore(path)
     def selected(self, id):
         return self.test_ids is None or str(uuid.UUID(id)) in self.test_ids
     def verify(self):
@@ -139,7 +137,7 @@ class Outbox:
                 raise ValueError('Outbox token must belong to Team Partner Agent in the configured workspace')
             self.verified = True
     def db(self):
-        db=sqlite3.connect(self.path,timeout=10); db.row_factory=sqlite3.Row; return db
+        return self.store.connect()
     def get(self,id):
         with self.db() as db:
             r=db.execute('SELECT * FROM outbox_delivery WHERE id=?',(id,)).fetchone()
