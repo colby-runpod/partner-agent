@@ -7,6 +7,13 @@ import time
 
 
 def main():
+    mode = os.environ.get("AGENT_RUNTIME_MODE", "active")
+    if mode not in {"active", "standby"}:
+        raise ValueError("AGENT_RUNTIME_MODE must be active or standby")
+    if mode == "standby":
+        from standby import serve
+        serve()
+        return
     chat = os.environ.get('CHAT_ENABLED') == 'true'
     review = os.environ.get('REVIEW_ENABLED') == 'true'
     outbox = os.environ.get('OUTBOX_ENABLED') == 'true'
