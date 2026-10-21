@@ -64,10 +64,13 @@ def apply(review, facts):
     mapping = {'Act now': ('4', 'pursue'), 'Qualify': ('3', 'triage'), 'DQ': ('DQ', 'do_not_pursue'),
                'Route': ('3', 'triage'), 'Hold for Colby': ('3', 'triage'), 'Needs research': ('3', 'triage')}
     review['score'], review['decision'] = mapping[result['tier']]
+    # DQ select is reserved for spam; ordinary disqualification retains a number.
+    if result['tier'] == 'DQ' and facts.get('risk') != 'spam':
+        review['score'] = '2'
     review['why'] = notes(result)
     review['next_step'] = {'Act now': 'Review the priority lead in the shared review queue.',
         'Qualify': 'Draft 1-3 specific probe questions for daily batch approval.',
-        'DQ': 'Queue a soft-decline draft after seven days with a re-entry question; do not send.',
+        'DQ': 'Record the reason. Only eligible verified, non-spam, non-supply leads get a soft-decline draft after seven days; include a re-entry line and never send.',
         'Route': 'Route to ' + result['reason'] + '; this is not a partnership quality rejection.',
         'Hold for Colby': 'Hold for Colby to review the documented risk before any outreach.',
         'Needs research': result['reason']}[result['tier']]

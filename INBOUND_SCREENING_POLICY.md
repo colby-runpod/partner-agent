@@ -4,7 +4,7 @@ Apply this policy to the scheduled partner intake pipeline. Repository deploymen
 
 ## Scoring and evidence
 
-Record A (ask specificity), S (company substance), I (identity), C (commercial signal), V (strategic value), each integer 0-3, plus `3A + 2S + I + 3C + 2V` out of 33 in Quality Notes. Keep the old Qualification Score select as a compatibility bucket, not the total. Evidence must distinguish claims, verified findings and unknowns. Empty web search for a real small software business is unknown (S=1), not proof of fraud.
+Record A (ask specificity), S (company substance), I (identity), C (commercial signal), V (strategic value), each integer 0-3, plus `3A + 2S + I + 3C + 2V` out of 33 in Quality Notes. Keep the old Qualification Score select as a compatibility bucket, not the total: Act now=4, Qualify/Route/Hold/Needs research=3, non-spam DQ=2, spam only=DQ. Evidence must distinguish claims, verified findings and unknowns. Empty web search for a real small software business is unknown (S=1), not proof of fraud.
 
 Risk first: a documented policy/export concern, clear misrepresentation or spam is DQ, except S=3 is held for Colby, following section 6 of the supplied brief. Country or nationality alone does not establish a sanctions violation. Cite the specific concern and route uncertain findings for review. Wrong-door vendor, compute purchase, credits/startup, creator/affiliate and subscale hosting requests are Route, not partnership DQ. Predevelopment supply without secured site/power/hardware remains DQ with a re-entry invitation.
 
@@ -29,7 +29,7 @@ Match duplicates by normalized company, domain and explicit verified aliases, in
 
 ## Posting contract
 
-The scheduled pipeline is the intake tracker writer. It writes Slack mrkdwn verbatim to Partner Agent Outbox (source `b9f3d371-6c3b-47f5-880a-47342ae69456`). No DMs and no user-identity Slack posts after cutover. Handoffs go to the supply/events feed channels; priority alerts, daily digest and invitation queue go to #ask-partners. Use `Not Before` at 08:30 America/Denver for the weekday digest. Read Confirmed/Declined pickup back from the outbox on the next run; the bot does not write handoff status on intake.
+The scheduled pipeline is the intake tracker writer. It writes Slack mrkdwn verbatim to Partner Agent Outbox (source `b9f3d371-6c3b-47f5-880a-47342ae69456`). No DMs and no user-identity Slack posts after cutover. Handoffs go to the supply/events feed channels; priority alerts, processing updates and the daily digest go to #team-partnerships-development (C0C7R970C5T); invitation decisions remain in #ask-partners (C0C7HG8KYFL). Use `Not Before` at 08:30 America/Denver for the weekday digest. Read Confirmed/Declined pickup back from the outbox on the next run; the bot does not write handoff status on intake.
 
 Invitation approvals are the narrow exception: the bot writes only Invitation Decision, Invitation Approved By and Invitation Approved Date on Colby's button click. Call first changes only the outbox. The pipeline drafts, Colby sends.
 

@@ -13,6 +13,8 @@ def facts(a,s,i,c,v,**kw):
 class ScreeningTests(unittest.TestCase):
     def test_calibration(self):
         cases=[('Kovara return',facts(3,1,2,3,2),'Act now',26),
+               ('Kovara original',facts(2,1,1,0,2),'Qualify',13),
+               ('Eranyacloud',facts(2,3,1,1,2),'Qualify',20),
                ('ACKstorm blank',facts(0,3,3,0,3),'Qualify',15),
                ('ACKstorm source',facts(2,3,3,0,3),'Act now',21),
                ('PYXON',facts(1,2,1,1,1),'Qualify',13),
@@ -43,6 +45,9 @@ class ScreeningTests(unittest.TestCase):
         for val in (True,4,-1,'2',1.5):
             f=facts(1,1,1,1,1);f['scores']['A']=val
             with self.assertRaises(ValueError):screening.evaluate(f)
+    def test_dq_select_reserved_for_spam(self):
+        self.assertEqual(screening.apply({}, facts(1,1,1,0,1))['score'], '2')
+        self.assertEqual(screening.apply({}, facts(1,1,1,0,1,risk='spam',risk_evidence='spam pitch'))['score'], 'DQ')
     def test_legacy_unchanged_v2_opt_in_and_ledger_notes(self):
         d=copy.deepcopy(GOOD);d['screening']=facts(1,1,1,0,1,unverifiable=True,research={k:'done' for k in screening.RESEARCH})
         self.assertEqual(review.parse(json.dumps(d))['score'],'4')

@@ -52,6 +52,18 @@ class OutboxTests(unittest.TestCase):
     def setup_box(self,pages):
         self.remote=Remote(pages); self.box=o.Outbox(self.temp.name+'/ledger.db',self.remote); return self.box
     def posts(self): return [p for method,p in self.remote.calls if method=='chat.postMessage']
+    def test_development_update_posts_once(self):
+        p = page(kind='other', channel='C0C7R970C5T')
+        box = self.setup_box([p]); box.poll(); box.poll()
+        self.assertEqual(len(self.posts()), 1)
+        self.assertEqual(self.posts()[0]['channel'], 'C0C7R970C5T')
+
+    def test_invitation_buttons_still_require_ask_partners(self):
+        p = page(kind='invitation_queue', channel='C0C7R970C5T')
+        p['properties']['Related Intake']['relation'] = [{'id':str(uuid.UUID(int=100))}]
+        with self.assertRaisesRegex(ValueError, 'Invitations must be in ask-partners'):
+            o.payload(o.row(p))
+
     def test_test_ids_leave_real_queue_untouched(self):
         real, test = page(1), page(2)
         with patch.dict(os.environ, OUTBOX_TEST_IDS=test['id']):
