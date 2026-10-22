@@ -115,3 +115,12 @@ review history, outbox posting with fake external clients, and receipt lookup
 through the configured backend. No live AWS schema, credentials, or service
 settings were changed. Historical-state reconciliation and controlled AWS
 acceptance are still required before setting the readiness assertion.
+
+### Historical-state recovery gate
+
+See `AWS-PILOT-TEST.md` for the current recovery gate and staged AWS validation.
+`reconcile_state.py` inventories recovered SQLite snapshots read-only and compares
+canonical row fingerprints as well as counts. Reports always leave cutover
+readiness false; matching snapshots do not establish that old writers stopped or
+that PostgreSQL contains the same history. No usable local agent backup was found
+during the October 22 check. PostgreSQL import is not implemented by this tool.
