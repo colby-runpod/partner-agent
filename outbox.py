@@ -121,11 +121,13 @@ class Remote:
         return self.notion('GET','pages/'+str(uuid.UUID(id)))
 
 class Outbox:
-    def __init__(self, path, remote=None):
+    def __init__(self, path, remote=None, storage=None):
         self.path=path; self.remote=remote or Remote(); self.verified=False
+        self.storage=storage
         raw = os.environ.get('OUTBOX_TEST_IDS')
         self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
         # A present but empty/malformed restriction fails closed during startup.
+        if storage is not None: return
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS outbox_delivery (id TEXT PRIMARY KEY, snapshot TEXT NOT NULL, state TEXT NOT NULL, ts TEXT, decision TEXT, actor TEXT, at TEXT, error TEXT)')
             db.execute('CREATE INDEX IF NOT EXISTS outbox_ts ON outbox_delivery(ts)')
@@ -141,13 +143,39 @@ class Outbox:
     def db(self):
         db=sqlite3.connect(self.path,timeout=10); db.row_factory=sqlite3.Row; return db
     def get(self,id):
+        if self.storage is not None: return self.storage.delivery(id)
         with self.db() as db:
             r=db.execute('SELECT * FROM outbox_delivery WHERE id=?',(id,)).fetchone()
             return dict(r) if r else None
     def save(self,id,**fields):
+        if self.storage is not None: return self.storage.save_delivery(id,**fields)
         if not fields.keys() <= {'state','ts','decision','actor','at','error'}: raise ValueError('Invalid ledger field')
         with self.db() as db:
             db.execute('UPDATE outbox_delivery SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',[*fields.values(),id])
+    def pending_deliveries(self):
+        if self.storage is not None: return self.storage.pending_deliveries()
+        with self.db() as db:
+            return [dict(x) for x in db.execute("SELECT * FROM outbox_delivery WHERE state IN ('sync','deciding')")]
+    def pending_events(self):
+        if self.storage is not None: return self.storage.pending_events()
+        with self.db() as db:
+            return [dict(x) for x in db.execute('SELECT * FROM outbox_events WHERE done=0 ORDER BY rowid LIMIT 100')]
+    def finish_event(self,key):
+        if self.storage is not None: return self.storage.finish_event(key)
+        with self.db() as db:
+            db.execute('UPDATE outbox_events SET done=1 WHERE key=?',(key,))
+    def claim_send(self,r):
+        if self.storage is not None: return self.storage.claim_send(r,now())
+        with self.db() as db:
+            return bool(db.execute('INSERT OR IGNORE INTO outbox_delivery(id,snapshot,state,at) VALUES (?,?,?,?)',(r['id'],json.dumps(r),'sending',now())).rowcount)
+    def matches(self,ts):
+        if self.storage is not None: return self.storage.matching_deliveries(ts)
+        with self.db() as db:
+            return [dict(x) for x in db.execute('SELECT * FROM outbox_delivery WHERE ts=?',(ts,))]
+    def decide(self,id,decision,actor):
+        if self.storage is not None: return self.storage.decide(id,decision,actor,now())
+        with self.db() as db:
+            return bool(db.execute("UPDATE outbox_delivery SET decision=?,actor=?,at=?,state='deciding' WHERE id=? AND decision IS NULL",(decision,actor,now(),id)).rowcount)
     def sync(self,d):
         if not self.selected(d['id']): return
         r=json.loads(d['snapshot']); ts=d['ts']
@@ -185,17 +213,15 @@ class Outbox:
     def poll(self):
         self.verify()
         # Resume writebacks/decisions without re-posting messages.
-        with self.db() as db:
-            pending=[dict(x) for x in db.execute("SELECT * FROM outbox_delivery WHERE state IN ('sync','deciding')")]
+        pending=self.pending_deliveries()
         for d in pending:
             try: self.sync(d)
             except Exception: self.save(d['id'],error='Writeback pending; inspect permissions or remote availability')
-        with self.db() as db:
-            events=[dict(x) for x in db.execute('SELECT * FROM outbox_events WHERE done=0 ORDER BY rowid LIMIT 100')]
+        events=self.pending_events()
         for e in events:
             try:
                 self.event(json.loads(e['payload']))
-                with self.db() as db: db.execute('UPDATE outbox_events SET done=1 WHERE key=?',(e['key'],))
+                self.finish_event(e['key'])
             except Exception:
                 print('Outbox pickup/decision pending; retrying next poll.',flush=True)
         for page in self.remote.query({'property':'Status','select':{'equals':'Queued'}}):
@@ -241,8 +267,7 @@ class Outbox:
         # Recheck cancellation immediately before taking the irreversible send fence.
         fresh = self.remote.get(r['id'])
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
-        with self.db() as db:
-            if not db.execute('INSERT OR IGNORE INTO outbox_delivery(id,snapshot,state,at) VALUES (?,?,?,?)',(r['id'],json.dumps(r),'sending',now())).rowcount: return
+        if not self.claim_send(r): return
         for attempt in range(2):
             try:
                 result=self.remote.slack('chat.postMessage',message)
@@ -259,13 +284,13 @@ class Outbox:
                 # Preserve sync state if Slack succeeded; otherwise sending is a durable uncertainty fence.
                 raise
     def enqueue_event(self,e):
+        if self.storage is not None: return self.storage.enqueue_event(e)
         with self.db() as db:
             db.execute('INSERT OR IGNORE INTO outbox_events(key,payload) VALUES (?,?)',(e['key'],json.dumps(e)))
         # Poll owns retry and keeps decisions durable even during a remote outage.
     def event(self,e):
         self.verify()
-        with self.db() as db:
-            matches=[dict(x) for x in db.execute('SELECT * FROM outbox_delivery WHERE ts=?',(e['message_ts'],))]
+        matches=self.matches(e['message_ts'])
         d=next((x for x in matches if json.loads(x['snapshot'])['channel']==e['channel']),None)
         if not d or d['decision'] or not self.selected(d['id']): return
         r=json.loads(d['snapshot'])
@@ -284,8 +309,7 @@ class Outbox:
             if user.get('is_bot') or user.get('is_app_user') or user.get('deleted'): return
             if e.get('reply') and e['user']==COLBY: return
             decision='Declined' if e.get('reaction')=='x' else 'Confirmed'
-        with self.db() as db:
-            db.execute("UPDATE outbox_delivery SET decision=?,actor=?,at=?,state='deciding' WHERE id=? AND decision IS NULL",(decision,e['user'],now(),r['id']))
+        if not self.decide(r['id'],decision,e['user']): return
         self.sync(self.get(r['id']))
 
 def owns(channel,ts):

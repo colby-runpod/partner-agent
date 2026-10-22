@@ -43,7 +43,7 @@ def main():
             # Full diagnostics are safe only here: all credentials are disposable fixtures.
             run(*base,name,'python','-c','import bootstrap_postgres; bootstrap_postgres.main()')
             run(*base,name,'python','-c','import bootstrap_postgres; bootstrap_postgres.main()')
-            run(*base,'-v',str(repo/'integration')+':/app/integration:ro','-e','PYTHONPATH=/app',
+            run(*base,'-v',str(repo)+':/source:ro','-v',str(repo/'integration')+':/app/integration:ro','-e','PYTHONPATH=/app:/source',
                 name,'python','/app/integration/test_postgres.py')
         finally:
             subprocess.run(['docker','rm','-fv',name],capture_output=True)

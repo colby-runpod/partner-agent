@@ -99,3 +99,26 @@ class PostgresStore:
             rows=db.execute('SELECT snapshot FROM partner_agent.outbox_delivery WHERE namespace=%s AND ts=%s',
                             (self.namespace,ts)).fetchall()
             return any(json.loads(r['snapshot'])['channel']==channel for r in rows)
+
+    def save_delivery(self, row_id, **fields):
+        if not fields or not fields.keys() <= {'state','ts','decision','actor','at','error'}:
+            raise ValueError('Invalid ledger field')
+        with self.connect() as db:
+            db.execute('UPDATE partner_agent.outbox_delivery SET '+','.join(k+'=%s' for k in fields)+
+                       ' WHERE namespace=%s AND id=%s',(*fields.values(),self.namespace,row_id))
+
+    def pending_deliveries(self):
+        with self.connect() as db:
+            return db.execute("SELECT * FROM partner_agent.outbox_delivery WHERE namespace=%s AND state IN ('sync','deciding')",(self.namespace,)).fetchall()
+
+    def matching_deliveries(self, ts):
+        with self.connect() as db:
+            return db.execute('SELECT * FROM partner_agent.outbox_delivery WHERE namespace=%s AND ts=%s',(self.namespace,ts)).fetchall()
+
+    def pending_events(self):
+        with self.connect() as db:
+            return db.execute('SELECT * FROM partner_agent.outbox_events WHERE namespace=%s AND done=FALSE ORDER BY sequence LIMIT 100',(self.namespace,)).fetchall()
+
+    def finish_event(self, key):
+        with self.connect() as db:
+            db.execute('UPDATE partner_agent.outbox_events SET done=TRUE WHERE namespace=%s AND key=%s',(self.namespace,key))

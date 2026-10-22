@@ -26,3 +26,16 @@ Run `python3 scripts/test_postgres_local.py` with Docker and OpenSSL available. 
 6. Explicitly authorize production cutover after fencing former workers. An empty schema is not recovered processing history.
 
 The pilot is single-zone with seven-day backups. It is not a completed disaster recovery solution; restore and cross-failure-domain recovery remain to be tested.
+
+### Outbox adapter validation
+
+The outbox accepts an explicitly injected PostgreSQL store for integration tests.
+Its polling, delivery fence, receipt recovery, pickup queue, and first-writer
+invitation decisions use that store without opening a SQLite database. Production
+entry points still select SQLite; this is not an activation switch.
+
+The disposable PostgreSQL suite now includes outbox restart after a failed Notion
+writeback, ambiguous Slack timeout across restart, and event namespace isolation.
+External Slack and Notion calls in these tests are simulated. No live messages are
+sent. Receiver and review-history migration, worker coordination, and historical
+state reconciliation remain activation prerequisites.

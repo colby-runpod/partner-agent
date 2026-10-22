@@ -69,6 +69,40 @@ class StorageTests(unittest.TestCase):
     def test_duplicate_events(self):
         self.assertEqual(sum(self.parallel(lambda:self.store.enqueue_event({'key':'event'}))),1)
 
+    def test_outbox_restart_finishes_writeback_without_repost(self):
+        from unittest.mock import patch
+        from outbox import Outbox, prop
+        from test_outbox import Remote, page
+        p=page(); remote=Remote([p]); remote.patch_fail=1
+        with patch.dict(os.environ,SLACK_TEAM_ID='T1',OUTBOX_TEST_IDS=p['id']):
+            box=Outbox(None,remote,storage=self.store)
+            box.poll()
+            self.assertEqual(self.store.delivery(p['id'])['state'],'sync')
+            restarted=Outbox(None,remote,storage=PostgresStore(self.connection,self.store.namespace))
+            restarted.poll(); restarted.poll()
+        self.assertEqual(sum(m=='chat.postMessage' for m,_ in remote.calls),1)
+        self.assertEqual(prop(remote.get(p['id']),'Status'),'Posted')
+
+    def test_outbox_timeout_is_not_reposted_after_restart(self):
+        from unittest.mock import patch
+        from outbox import Outbox
+        from test_outbox import Remote, page
+        p=page(); remote=Remote([p]); remote.fail=[TimeoutError()]
+        with patch.dict(os.environ,SLACK_TEAM_ID='T1',OUTBOX_TEST_IDS=p['id']):
+            Outbox(None,remote,storage=self.store).poll()
+            Outbox(None,remote,storage=PostgresStore(self.connection,self.store.namespace)).poll()
+        self.assertEqual(sum(m=='chat.postMessage' for m,_ in remote.calls),1)
+        self.assertEqual(self.store.delivery(p['id'])['state'],'sending')
+
+    def test_pending_events_scoped_and_persistent(self):
+        self.store.enqueue_event({'key':'one'})
+        other=PostgresStore(self.connection,'test:'+uuid.uuid4().hex)
+        self.assertEqual(other.pending_events(),[])
+        other.finish_event('one')
+        self.assertEqual(len(self.store.pending_events()),1)
+        self.store.finish_event('one')
+        self.assertEqual(self.store.pending_events(),[])
+
     def test_no_unverified_tls(self):
         settings=dict(self.connection,sslmode='require')
         with self.assertRaises(ValueError):PostgresStore(settings,'test:bot')
