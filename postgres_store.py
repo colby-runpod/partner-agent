@@ -151,3 +151,12 @@ CREATE TABLE IF NOT EXISTS partner_agent.feedback (
 );
 CREATE INDEX IF NOT EXISTS review_time ON partner_agent.reviews(namespace,created);
 """
+
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS partner_agent.worker_ownership (
+ namespace TEXT NOT NULL, role TEXT NOT NULL, owner TEXT NOT NULL,
+ active BOOLEAN NOT NULL DEFAULT TRUE,
+ started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(namespace,role)
+);
+"""

@@ -58,3 +58,30 @@ Live entry points still use SQLite. Before activation, finish shared worker
 coordination and backend selection, reconcile historical state, migrate the AWS
 schema, and run a restricted end-to-end test. Do not enable live processing based
 on these adapter tests alone.
+
+### Exclusive worker sessions and crash recovery
+
+`postgres_worker.worker_session(store, role)` yields a storage adapter bound to a
+single owning PostgreSQL connection. Roles are `queue` and `outbox`; ownership is
+scoped to the workspace/bot namespace. A session advisory lock prevents concurrent
+owners. A durable ownership record blocks automatic takeover after connection
+loss or a process crash, even after PostgreSQL releases the advisory lock.
+
+Use the yielded adapter for every queue, review-ledger, and outbox operation in
+that worker. Database failures terminate that adapter with `WorkerStopped`, which
+ordinary per-job `except Exception` handlers cannot suppress. The adapter never
+reconnects and cannot be reused after its context ends. Normal context completion
+releases the durable hold; exceptions, signals that interrupt execution, and
+uncertain release commits retain it conservatively.
+
+This deliberately favors duplicate prevention over automatic recovery. A database
+lease expiring would not prove that an old Slack/Notion request has stopped.
+Before an operator clears a crash hold, stop and verify termination of the former
+worker, inspect pending external-write and send receipts, and reconcile uncertain
+operations. Never clear ownership solely because its timestamp is old. A complete
+operator recovery command and deployment integration remain outstanding.
+
+Twenty disposable PostgreSQL tests now pass, including mutual exclusion, normal
+handoff, namespace independence, process failure, and loss of the owning database
+connection. This mechanism is not yet selected by production entry points. AWS
+schema and service settings have not changed.

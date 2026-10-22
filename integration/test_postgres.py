@@ -172,6 +172,42 @@ class StorageTests(unittest.TestCase):
         ledger.unvote('one','U1','down')
         self.assertEqual(ledger.feedback_since(0),[])
 
+    def test_worker_exclusion_and_clean_takeover(self):
+        from postgres_worker import worker_session, WorkerBusy, WorkerStopped
+        with worker_session(self.store,'queue') as worker:
+            worker.enqueue({'key':'owned','event_id':'owned'})
+            with self.assertRaises(WorkerBusy):
+                with worker_session(self.store,'queue'): pass
+            with worker_session(self.store,'outbox') as independent:
+                independent.check()
+        with self.assertRaises(WorkerStopped): worker.check()
+        with worker_session(self.store,'queue') as replacement:
+            self.assertEqual(replacement.next_job()['key'],'owned')
+
+    def test_worker_crash_blocks_automatic_takeover(self):
+        from postgres_worker import worker_session, WorkerBusy
+        with self.assertRaises(RuntimeError):
+            with worker_session(self.store,'queue'):
+                raise RuntimeError('simulated process failure')
+        with self.assertRaises(WorkerBusy):
+            with worker_session(self.store,'queue'): pass
+
+    def test_worker_connection_loss_is_fatal_and_retains_hold(self):
+        from postgres_worker import worker_session, WorkerBusy, WorkerStopped
+        with self.assertRaises(WorkerStopped):
+            with worker_session(self.store,'queue') as worker:
+                worker._db.close()
+                worker.next_job()
+        with self.assertRaises(WorkerBusy):
+            with worker_session(self.store,'queue'): pass
+
+    def test_worker_namespace_independence(self):
+        from postgres_worker import worker_session
+        other=PostgresStore(self.connection,'test:'+uuid.uuid4().hex)
+        with worker_session(self.store,'queue') as first:
+            with worker_session(other,'queue') as second:
+                first.check(); second.check()
+
     def test_no_unverified_tls(self):
         settings=dict(self.connection,sslmode='require')
         with self.assertRaises(ValueError):PostgresStore(settings,'test:bot')
