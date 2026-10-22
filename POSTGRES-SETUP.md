@@ -39,3 +39,22 @@ writeback, ambiguous Slack timeout across restart, and event namespace isolation
 External Slack and Notion calls in these tests are simulated. No live messages are
 sent. Receiver and review-history migration, worker coordination, and historical
 state reconciliation remain activation prerequisites.
+
+### Receiver and review history validation
+
+`PostgresStore` can now be injected into the existing event receiver. An enqueue
+or commit error becomes `StorageUnavailable`, which events and interactions return
+as HTTP 503 without exposing database error details. A repeated event after an
+uncertain commit is deduplicated. `next_job` preserves queue ordering but is only
+a selection operation, not a distributed worker lock.
+
+`PostgresLedger` implements review history, delivery receipts, metadata, and
+feedback. Card lookup requires the channel as well as the timestamp. Feedback
+updates serialize on the review row and retire old votes without DELETE access.
+The schema additions have been tested locally, not applied to the AWS pilot yet.
+
+Validation: 309 existing unit tests and 16 disposable TLS PostgreSQL tests pass.
+Live entry points still use SQLite. Before activation, finish shared worker
+coordination and backend selection, reconcile historical state, migrate the AWS
+schema, and run a restricted end-to-end test. Do not enable live processing based
+on these adapter tests alone.

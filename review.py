@@ -36,6 +36,7 @@ import html
 import json
 import os
 import re
+from storage_errors import StorageUnavailable
 import sqlite3
 import time
 import urllib.error
@@ -386,7 +387,7 @@ def interactions(env, start, cfg, store):
         return respond('200 OK')
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return respond('400 Bad Request')
-    except sqlite3.Error:
+    except (sqlite3.Error, StorageUnavailable):
         return respond('503 Service Unavailable')
 
 
@@ -750,10 +751,10 @@ class Ledger:
         """The latest successful review behind a card, or behind a digest thread."""
         with self._db() as db:
             if card_ts:
-                row = db.execute("SELECT * FROM reviews WHERE card_ts=? AND outcome='ok'", (card_ts,)).fetchone()
+                row = db.execute("SELECT * FROM reviews WHERE card_ts=? AND outcome='ok' AND (? IS NULL OR channel=?)", (card_ts,channel,channel)).fetchone()
             else:
-                row = db.execute("SELECT * FROM reviews WHERE ts=? AND outcome='ok' ORDER BY created DESC LIMIT 1",
-                                 (thread_ts,)).fetchone()
+                row = db.execute("SELECT * FROM reviews WHERE ts=? AND outcome='ok' AND (? IS NULL OR channel=?) ORDER BY created DESC LIMIT 1",
+                                 (thread_ts,channel,channel)).fetchone()
             return dict(row) if row else None
 
     def feedback(self, fid, review_key, user, vote, value='', now=None):
@@ -1040,7 +1041,7 @@ def with_prior(text, ledger, clients, event):
     if not isinstance(review, dict):
         return text
     try:
-        prev = ledger.find(thread_ts=event['thread_ts'])
+        prev = ledger.find(thread_ts=event['thread_ts'], channel=event['channel'])
     except Exception:
         return text
     if not prev:
@@ -1276,9 +1277,9 @@ def process_feedback(store, job, clients, ledger):
     store.update(key, state='done')
     try:
         if event['vote'] == 'correct':
-            row = ledger.find(thread_ts=event['thread_ts'])
+            row = ledger.find(thread_ts=event['thread_ts'], channel=event['channel'])
         else:
-            row = ledger.find(card_ts=event['card_ts'])
+            row = ledger.find(card_ts=event['card_ts'], channel=event['channel'])
         if not row:
             return  # Not one of our reviewed cards; nothing to log.
         if event.get('removed'):

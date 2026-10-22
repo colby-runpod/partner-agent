@@ -44,10 +44,15 @@ class PostgresStore:
         return psycopg.connect(**self.connection, connect_timeout=10, row_factory=dict_row)
 
     def enqueue(self, event):
-        with self.connect() as db:
-            return db.execute('''INSERT INTO partner_agent.jobs(namespace,key,event_id,payload)
-                VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
-                (self.namespace,event['key'],event['event_id'],json.dumps(event))).rowcount == 1
+        from storage_errors import StorageUnavailable
+        try:
+            with self.connect() as db:
+                return db.execute('''INSERT INTO partner_agent.jobs(namespace,key,event_id,payload)
+                    VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING''',
+                    (self.namespace,event['key'],event['event_id'],json.dumps(event))).rowcount == 1
+        except psycopg.Error:
+            # This includes commit failures: never acknowledge an unconfirmed enqueue.
+            raise StorageUnavailable('Queue unavailable') from None
 
     def get(self, key):
         with self.connect() as db:
@@ -122,3 +127,27 @@ class PostgresStore:
     def finish_event(self, key):
         with self.connect() as db:
             db.execute('UPDATE partner_agent.outbox_events SET done=TRUE WHERE namespace=%s AND key=%s',(self.namespace,key))
+
+    def next_job(self):
+        # Selection only. Worker ownership is required before using this in production.
+        with self.connect() as db:
+            return db.execute("SELECT * FROM partner_agent.jobs WHERE namespace=%s AND (state IN ('pending','processing','writing') OR (reply IS NOT NULL AND reply_state='pending')) ORDER BY sequence LIMIT 1",(self.namespace,)).fetchone()
+
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS partner_agent.reviews (
+ namespace TEXT NOT NULL, key TEXT NOT NULL, channel TEXT, ts TEXT,
+ created DOUBLE PRECISION, company TEXT, route TEXT, score TEXT, decision TEXT,
+ headline TEXT, outcome TEXT, delivered TEXT, card_ts TEXT, data TEXT,
+ card_text TEXT, notion_url TEXT, notion_id TEXT, notes TEXT, parked_by TEXT,
+ PRIMARY KEY(namespace,key)
+);
+CREATE TABLE IF NOT EXISTS partner_agent.review_meta (
+ namespace TEXT NOT NULL, k TEXT NOT NULL, v TEXT, PRIMARY KEY(namespace,k)
+);
+CREATE TABLE IF NOT EXISTS partner_agent.feedback (
+ namespace TEXT NOT NULL, id TEXT NOT NULL, review_key TEXT, "user" TEXT,
+ vote TEXT, value TEXT, created DOUBLE PRECISION, active BOOLEAN NOT NULL DEFAULT TRUE,
+ PRIMARY KEY(namespace,id)
+);
+CREATE INDEX IF NOT EXISTS review_time ON partner_agent.reviews(namespace,created);
+"""

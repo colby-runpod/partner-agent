@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+from storage_errors import StorageUnavailable
 import sqlite3
 import time
 import urllib.error
@@ -307,7 +308,7 @@ class Application:
             return respond('200 OK', {'ok': True})
         except (ValueError, TypeError, KeyError, AttributeError):
             return respond('400 Bad Request', {})
-        except sqlite3.Error:
+        except (sqlite3.Error, StorageUnavailable):
             return respond('503 Service Unavailable', {'error': 'queue_unavailable'})
 
 

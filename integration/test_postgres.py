@@ -103,6 +103,75 @@ class StorageTests(unittest.TestCase):
         self.store.finish_event('one')
         self.assertEqual(self.store.pending_events(),[])
 
+    def test_receiver_commits_before_ack_and_deduplicates_retry(self):
+        import hashlib, hmac, io, time
+        from intake import Application
+        raw=b'{"type":"event_callback"}'
+        stamp=str(int(time.time()))
+        signature='v0='+hmac.new(b'fixture',b'v0:'+stamp.encode()+b':'+raw,hashlib.sha256).hexdigest()
+        event={'key':'incoming','event_id':'incoming-event'}
+        def invoke(store):
+            status=[]
+            app=Application({'secret':'fixture','enabled':True},store,lambda *_:event)
+            app({'PATH_INFO':'/slack/events','REQUEST_METHOD':'POST','CONTENT_LENGTH':str(len(raw)),
+                 'wsgi.input':io.BytesIO(raw),'HTTP_X_SLACK_REQUEST_TIMESTAMP':stamp,
+                 'HTTP_X_SLACK_SIGNATURE':signature},lambda code,_:status.append(code))
+            return status[0]
+        self.assertEqual(invoke(self.store),'200 OK')
+        restarted=PostgresStore(self.connection,self.store.namespace)
+        self.assertEqual(restarted.next_job()['key'],'incoming')
+        self.assertEqual(invoke(restarted),'200 OK')
+        restarted.update('incoming',state='done')
+        self.assertIsNone(restarted.next_job())
+        broken=PostgresStore(dict(self.connection,port=1),self.store.namespace)
+        self.assertEqual(invoke(broken),'503 Service Unavailable')
+
+    def test_commit_acknowledgement_failure_is_retryable(self):
+        from contextlib import contextmanager
+        from unittest.mock import patch
+        from storage_errors import StorageUnavailable
+        connect=self.store.connect
+        @contextmanager
+        def uncertain_commit():
+            with connect() as db:
+                yield db
+            # Simulate loss of the commit acknowledgement after the server committed.
+            raise psycopg.OperationalError('simulated commit acknowledgement loss')
+        event={'key':'uncertain','event_id':'uncertain-event'}
+        with patch.object(self.store,'connect',uncertain_commit):
+            with self.assertRaises(StorageUnavailable): self.store.enqueue(event)
+        self.assertFalse(self.store.enqueue(event))
+        self.assertEqual(self.store.next_job()['key'],'uncertain')
+
+    def test_review_history_survives_restart_and_scopes_channels(self):
+        from postgres_ledger import PostgresLedger
+        ledger=PostgresLedger(self.store)
+        ledger.record('one',{'channel':'C1','thread_ts':'1.0'},
+                      {'company':'A &amp; B','score':3,'headline':'Review','drafts':[('a','b')]},'ok',now=1)
+        ledger.delivered('one','sent','2.0')
+        ledger.mark('one',notes='retained')
+        ledger.put('cursor',123)
+        restarted=PostgresLedger(PostgresStore(self.connection,self.store.namespace))
+        self.assertEqual(restarted.review('one')['notes'],'retained')
+        self.assertEqual(restarted.get('cursor'),'123')
+        self.assertEqual(restarted.find(card_ts='2.0',channel='C1')['company'],'A & B')
+        self.assertIsNone(restarted.find(card_ts='2.0',channel='C2'))
+        other=PostgresLedger(PostgresStore(self.connection,'test:'+uuid.uuid4().hex))
+        self.assertIsNone(other.review('one'))
+        self.assertEqual(other.since(0),[])
+        self.assertEqual(other.get('cursor','missing'),'missing')
+
+    def test_concurrent_feedback_has_one_active_vote(self):
+        from postgres_ledger import PostgresLedger
+        ledger=PostgresLedger(self.store)
+        ledger.record('one',{'channel':'C1','thread_ts':'1.0'},{'company':'Fixture'},'ok',now=1)
+        self.parallel(lambda:ledger.feedback(uuid.uuid4().hex,'one','U1','up',now=2))
+        self.assertEqual(len(ledger.feedback_since(0)),1)
+        ledger.feedback('down','one','U1','down',now=3)
+        self.assertEqual([x['vote'] for x in ledger.feedback_since(0)],['down'])
+        ledger.unvote('one','U1','down')
+        self.assertEqual(ledger.feedback_since(0),[])
+
     def test_no_unverified_tls(self):
         settings=dict(self.connection,sslmode='require')
         with self.assertRaises(ValueError):PostgresStore(settings,'test:bot')
