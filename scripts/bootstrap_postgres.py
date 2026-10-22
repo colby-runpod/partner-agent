@@ -29,11 +29,14 @@ def main():
             # RDS administrators are not PostgreSQL superusers. Temporarily grant
             # membership to assign ownership, then revoke in the same transaction.
             member=db.execute("SELECT pg_has_role(current_user,'agent_migrator','MEMBER')").fetchone()[0]
-            if not member:
-                db.execute(sql.SQL('GRANT agent_migrator TO {}').format(sql.Identifier(admin['username'])))
+            can_set=db.execute("SELECT pg_has_role(current_user,'agent_migrator','SET')").fetchone()[0]
+            if not can_set:
+                db.execute(sql.SQL('GRANT agent_migrator TO {} WITH SET TRUE').format(sql.Identifier(admin['username'])))
             db.execute('CREATE SCHEMA partner_agent AUTHORIZATION agent_migrator')
             if not member:
                 db.execute(sql.SQL('REVOKE agent_migrator FROM {}').format(sql.Identifier(admin['username'])))
+            elif not can_set:
+                db.execute(sql.SQL('REVOKE SET OPTION FOR agent_migrator FROM {}').format(sql.Identifier(admin['username'])))
         owner=db.execute("SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='partner_agent'").fetchone()[0]
         if owner != 'agent_migrator':
             raise ValueError('Unexpected existing schema owner')

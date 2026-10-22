@@ -40,8 +40,9 @@ def main():
                 "CREATE ROLE agent_admin LOGIN CREATEROLE CREATEDB PASSWORD 'disposable-fixture-only'; ALTER DATABASE partneragent OWNER TO agent_admin; ALTER SCHEMA public OWNER TO agent_admin;")
             base=['docker','run','--rm','--platform','linux/amd64','--network',name,
                   '--env-file',str(root/'fixture.env'),'-v',str(root/'cert.pem')+':/app/rds-ca.pem:ro']
-            run(*base,name)
-            run(*base,name)  # Existing accounts must not have their passwords reset.
+            # Full diagnostics are safe only here: all credentials are disposable fixtures.
+            run(*base,name,'python','-c','import bootstrap_postgres; bootstrap_postgres.main()')
+            run(*base,name,'python','-c','import bootstrap_postgres; bootstrap_postgres.main()')
             run(*base,'-v',str(repo/'integration')+':/app/integration:ro','-e','PYTHONPATH=/app',
                 name,'python','/app/integration/test_postgres.py')
         finally:
