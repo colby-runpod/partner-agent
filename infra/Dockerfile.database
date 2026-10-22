@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN pip install --no-cache-dir psycopg[binary]==3.2.13
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/us-east-2/us-east-2-bundle.pem', '/app/rds-ca.pem')"
+COPY postgres_store.py /app/
+COPY scripts/bootstrap_postgres.py /app/
+CMD ["python", "/app/bootstrap_postgres.py"]
