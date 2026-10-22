@@ -208,6 +208,38 @@ class StorageTests(unittest.TestCase):
             with worker_session(other,'queue') as second:
                 first.check(); second.check()
 
+    def test_configured_startup_uses_shared_store_through_workers(self):
+        from unittest.mock import patch
+        import storage
+        from test_outbox import Remote, page
+        team='T'+uuid.uuid4().hex
+        p=page()
+        with patch.dict(os.environ,STORAGE_BACKEND='postgres',POSTGRES_STATE_READY='true',
+                        SLACK_TEAM_ID=team,DB_SSL_ROOT_CERT='/app/rds-ca.pem',OUTBOX_TEST_IDS=p['id']):
+            receiver=storage.make_store('/must-not-create-sqlite')
+            receiver.enqueue({'key':'startup','event_id':'startup'})
+            with storage.worker_store('/must-not-create-sqlite') as worker:
+                self.assertEqual(worker.next_job()['key'],'startup')
+                ledger=storage.make_ledger(worker)
+                ledger.record('startup',{'channel':'C1','thread_ts':'1.0'},{'company':'Fixture'},'ok')
+                worker.update('startup',state='done')
+            with storage.worker_store('/must-not-create-sqlite','outbox') as worker:
+                box=storage.make_outbox(worker)
+                remote=Remote([p])
+                original=remote.slack
+                def slack(method,data):
+                    result=original(method,data)
+                    if method=='auth.test': result['team_id']=team
+                    return result
+                remote.slack=slack
+                box.remote=remote
+                box.poll(); box.poll()
+                self.assertEqual(sum(m=='chat.postMessage' for m,_ in remote.calls),1)
+                receipt=worker.delivery(p['id'])
+                self.assertTrue(storage.owns_message('C0CAL8C08RK',receipt['ts']))
+            self.assertEqual(storage.make_ledger(receiver).review('startup')['company'],'Fixture')
+            self.assertIsNone(receiver.next_job())
+
     def test_no_unverified_tls(self):
         settings=dict(self.connection,sslmode='require')
         with self.assertRaises(ValueError):PostgresStore(settings,'test:bot')

@@ -5,6 +5,7 @@ import hmac
 import html
 import json
 import os
+import storage
 from pathlib import Path
 import re
 from storage_errors import StorageUnavailable
@@ -313,7 +314,7 @@ class Application:
 
 
 def create_app():
-    return Application(load_config(), Store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')))
+    return Application(load_config(), storage.make_store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')))
 
 
 def worker():
@@ -321,10 +322,7 @@ def worker():
     cfg = load_config()
     if not cfg['enabled']:
         raise SystemExit('Set INTAKE_ENABLED=true after deployment setup to run the worker.')
-    store = Store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3'))
-    # One worker per persistent database; OS releases this lock on crashes.
-    with open(store.path + '.worker.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with storage.worker_store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')) as store:
         clients = Clients(cfg)
         while True:
             job = store.next_job()

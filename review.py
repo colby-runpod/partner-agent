@@ -35,6 +35,7 @@ import datetime as dt
 import html
 import json
 import os
+import storage
 import re
 from storage_errors import StorageUnavailable
 import sqlite3
@@ -344,7 +345,7 @@ def accept(body, cfg):
 
 def create_app():
     cfg = config()
-    app = Application(cfg, Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
+    app = Application(cfg, storage.make_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
 
     def wsgi(env, start):
         if env.get('PATH_INFO') == '/healthz' and env.get('REQUEST_METHOD') == 'GET':
@@ -1399,15 +1400,13 @@ def worker():
     cfg = config()
     if not cfg['enabled']:
         raise SystemExit('CHAT_ENABLED or REVIEW_ENABLED must be true')
-    store = Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3'))
-    ledger = Ledger(store.path)
-    with open(store.path + '.worker.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with storage.worker_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')) as store:
+        ledger = storage.make_ledger(store)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
         agent_writer = task_writer if cfg.get('tasks_enabled') else None
-        delivery = outbox.Outbox(store.path) if cfg.get('outbox_enabled') else None
+        delivery = storage.make_outbox(store) if cfg.get('outbox_enabled') else None
         while True:
             job = store.next_job()
             if not job:
@@ -1416,12 +1415,14 @@ def worker():
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action'):
                 try:
-                    if delivery:
-                        delivery.enqueue_event(json.loads(job['payload']))
+                    if not delivery:
+                        raise RuntimeError('Outbox processing is disabled')
+                    delivery.enqueue_event(json.loads(job['payload']))
                     store.update(job['key'], state='done')
                 except Exception:
                     # Accepted decisions are durable and reconciled by the next poll.
-                    store.update(job['key'], state='failed', error='Outbox event failed; inspect delivery ledger')
+                    store.update(job['key'], error='Outbox handoff pending; retry required')
+                    time.sleep(1)
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'feedback':

@@ -6,6 +6,7 @@ Never retry a timeout as a new post. One dedicated outbox worker owns this ledge
 import datetime as dt
 import json
 import os
+import storage
 import re
 import sqlite3
 import urllib.request
@@ -313,6 +314,8 @@ class Outbox:
         self.sync(self.get(r['id']))
 
 def owns(channel,ts):
+    if storage.backend() == 'postgres':
+        return storage.owns_message(channel,ts)
     path = os.environ.get('CHAT_DB', '/data/chat.sqlite3')
     try:
         with sqlite3.connect('file:'+path+'?mode=ro', uri=True, timeout=2) as db:
@@ -364,10 +367,10 @@ def worker():
     if os.environ.get('OUTBOX_ENABLED') != 'true':
         raise SystemExit('OUTBOX_ENABLED must be true')
     # Open after the receiver has initialized CHAT_DB; Outbox also creates its own tables.
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path + '.outbox.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        box = Outbox(path)
+    if storage.backend() == 'sqlite':
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with storage.worker_store(path,'outbox') as store:
+        box = storage.make_outbox(store)
         while True:
             try:
                 box.poll()

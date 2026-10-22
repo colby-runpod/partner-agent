@@ -1,6 +1,6 @@
 # PostgreSQL foundation: pilot only
 
-The private RDS instance exists. This change adds separate migration and runtime accounts, schema initialization and an independently tested storage foundation. It does **not** switch the receiver, review ledger, chat, outbox or p-OPS workers to PostgreSQL. The normal agent Dockerfile does not include this module or its driver; the health-only standby remains unchanged.
+The private RDS instance exists. Team Partner Agent now supports explicit PostgreSQL selection for the receiver, review history, chat, and outbox. The application image includes the database driver and trusted RDS certificate. SQLite remains the default, p-OPS is unchanged, and health-only standby does not initialize storage. The PostgreSQL path is tested locally but has not been activated in AWS.
 
 ## Credentials and bootstrap
 
@@ -18,8 +18,8 @@ Run `python3 scripts/test_postgres_local.py` with Docker and OpenSSL available. 
 
 ## Activation remains blocked
 
-1. Port receiver, review ledger, chat and outbox to the shared store together; do not silently fall back to SQLite.
-2. Add database-backed worker ownership and fail-closed behavior on loss of ownership before external actions.
+1. Verify the configured receiver, review ledger, chat and outbox against the migrated AWS schema; selection must remain consistent across instances.
+2. Validate deployment shutdown and the operator recovery procedure for durable worker crash holds.
 3. Import and compare existing SQLite jobs, receipts, review history and ambiguous deliveries; do not infer missing receipts from Notion alone.
 4. Test crash after Slack success, delayed writebacks, receiver database failure, restart, failover and rollback with fake external clients before controlled live records.
 5. Attach only runtime credentials to the approved application release. Keep migration and administrator secrets separate.
@@ -85,3 +85,33 @@ Twenty disposable PostgreSQL tests now pass, including mutual exclusion, normal
 handoff, namespace independence, process failure, and loss of the owning database
 connection. This mechanism is not yet selected by production entry points. AWS
 schema and service settings have not changed.
+
+### Startup configuration (implemented, not activated)
+
+The current startup wiring supersedes earlier adapter-only milestone notes above.
+`STORAGE_BACKEND` accepts `sqlite` (default) or `postgres`; unknown values fail.
+PostgreSQL requires all of:
+
+- `POSTGRES_STATE_READY=true`: an explicit assertion that historical state has
+  been reconciled. Do not set this on the current empty pilot yet.
+- `DB_HOST`: the private database endpoint.
+- `SLACK_TEAM_ID`: the intended workspace; the namespace combines this with the
+  fixed Team Partner Agent bot identity.
+- `RUNTIME_CREDENTIAL`: restricted `agent_runtime` credentials injected through
+  ECS Secrets Manager references, never GitHub variables or literal task values.
+- `DB_SSL_ROOT_CERT`: optional override of `/app/rds-ca.pem`; the file must exist.
+  TLS certificate and hostname verification are mandatory.
+
+Active startup checks database/schema access before launching children. Receiver
+connections use the shared store; queue and outbox workers acquire separate
+exclusive sessions. Reviews and outbox operations use their owning session.
+Receipt lookups also use PostgreSQL, and lookup failures return a retry response.
+An outbox-event handoff failure leaves the accepted queue job pending for retry.
+`AGENT_RUNTIME_MODE=standby` still bypasses all storage and processing startup.
+
+Validation now includes 314 unit tests and 21 disposable PostgreSQL tests. The
+startup-factory test exercises receiver enqueue, exclusive worker selection,
+review history, outbox posting with fake external clients, and receipt lookup
+through the configured backend. No live AWS schema, credentials, or service
+settings were changed. Historical-state reconciliation and controlled AWS
+acceptance are still required before setting the readiness assertion.

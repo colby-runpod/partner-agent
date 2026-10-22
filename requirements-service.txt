@@ -1,2 +1,4 @@
-# Web server only; core intake and tests use Python standard library.
+# Web server and optional PostgreSQL driver; SQLite tests use the standard library.
 gunicorn==23.0.0
+
+psycopg[binary]==3.2.13
