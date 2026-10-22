@@ -1,0 +1,61 @@
+name: Deploy AWS standby
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: aws-standby-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-2
+      AWS_ACCOUNT_ID: '626963115342'
+      ECR_REPOSITORY: team-partner-agent
+      SERVICE_ARN: arn:aws:ecs:us-east-2:626963115342:service/default/team-partner-agent-a223
+      HEALTH_URL: https://te-9776df4994d4439c9de9b95961285a76.ecs.us-east-2.on.aws/healthz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test before obtaining AWS credentials
+        run: python -m unittest discover -v
+      - name: Build image and check standby without credentials
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -t agent:test .
+          docker run -d --name standby-test -e AGENT_RUNTIME_MODE=standby agent:test
+          trap 'docker rm -f standby-test >/dev/null' EXIT
+          for i in $(seq 1 20); do
+            if docker exec standby-test python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/healthz")); assert d=={"status":"standby","processing_enabled":False}'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_STANDBY_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+          allowed-account-ids: '626963115342'
+      - name: Push unique immutable image and deploy standby
+        run: |
+          set -euo pipefail
+          registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          tag="$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          trap 'docker logout "$registry" >/dev/null' EXIT
+          docker tag agent:test "$registry/$ECR_REPOSITORY:$tag"
+          docker push "$registry/$ECR_REPOSITORY:$tag"
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$tag" --query 'imageDetails[0].imageDigest' --output text)
+          export DEPLOY_IMAGE="$registry/$ECR_REPOSITORY@$digest"
+          python scripts/deploy_aws_standby.py
