@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from storage_errors import StorageUnavailable
+import fresh_start
 
 
 def backend():
@@ -14,7 +15,16 @@ def backend():
 
 
 def postgres_settings():
-    if os.environ.get('POSTGRES_STATE_READY') != 'true':
+    boundary=fresh_start.cutoff()
+    if boundary is not None:
+        if os.environ.get('POSTGRES_STATE_READY') == 'true':
+            raise ValueError('Choose fresh start or reconciled state, not both')
+        if os.environ.get('LEGACY_WRITERS_STOPPED') != 'true':
+            raise ValueError('Fresh start requires verified legacy writer shutdown')
+        raw=os.environ.get('OUTBOX_CREATED_AFTER')
+        if not raw or raw != os.environ['POSTGRES_FRESH_START_AT']:
+            raise ValueError('Outbox cutoff must match the fresh-start boundary exactly')
+    elif os.environ.get('POSTGRES_STATE_READY') != 'true':
         raise ValueError('PostgreSQL requires reconciled state: POSTGRES_STATE_READY=true')
     host=os.environ.get('DB_HOST','')
     team=os.environ.get('SLACK_TEAM_ID','')
@@ -45,6 +55,7 @@ def make_store(path):
                 db.execute('SELECT * FROM partner_agent.'+table+' LIMIT 0')
     except psycopg.Error:
         raise StorageUnavailable('PostgreSQL schema or connection unavailable') from None
+    fresh_start.pin_boundary(store)
     return store
 
 

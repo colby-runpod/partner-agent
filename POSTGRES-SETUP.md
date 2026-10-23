@@ -151,3 +151,29 @@ Remaining activation work:
 4. Verify Slack event/interactivity URLs, restricted production credentials,
    single-worker ownership and a new post-cutoff acceptance fixture before
    enabling normal traffic. Preserve OUT-1 through OUT-21 as historical work.
+
+### Explicit fresh-start mode (implemented; not activated)
+
+Instead of the historical recovery assertion, startup can use:
+
+- `POSTGRES_FRESH_START_AT`: fixed timezone-aware timestamp selected at cutover.
+- `OUTBOX_CREATED_AFTER`: exactly the same value.
+- `LEGACY_WRITERS_STOPPED=true`: only after old writers are verified stopped.
+- Leave `POSTGRES_STATE_READY` unset; mixing the two modes fails.
+
+The first start requires an empty production namespace and records the normalized
+boundary in `review_meta`. Concurrent startup is serialized. Subsequent startup
+refuses a changed or removed boundary, including a switch to the reconciled
+assertion. Pilot OUT-22 remains in its own separate namespace. No schema changes
+are needed. Ordinary SQL access controls are unchanged; this is an application
+startup safeguard, not protection against privileged database edits.
+
+Signed Slack events are acknowledged without enqueuing if their message/event,
+thread, nested-message or reaction-target timestamp is old or invalid. Signed
+button clicks require both a new message and new action timestamps. New replies
+to pre-cutoff threads are intentionally excluded. Signature validation still
+runs first; Slack URL verification still works. Existing history is not recovered.
+
+Validation: 335 unit tests and 23 disposable TLS PostgreSQL tests, including
+concurrent marker creation, immutable boundary and nonempty-namespace refusal.
+No production cutoff or readiness assertion has been set.

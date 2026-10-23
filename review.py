@@ -36,6 +36,7 @@ import html
 import json
 import os
 import storage
+import fresh_start
 import re
 from storage_errors import StorageUnavailable
 import sqlite3
@@ -382,6 +383,8 @@ def interactions(env, start, cfg, store):
         if not verify(cfg['secret'], env.get('HTTP_X_SLACK_REQUEST_TIMESTAMP'), env.get('HTTP_X_SLACK_SIGNATURE'), raw):
             return respond('401 Unauthorized')
         payload = json.loads(urllib.parse.parse_qs(raw.decode())['payload'][0])
+        if not fresh_start.allows_action(payload):
+            return respond('200 OK')
         event = outbox.action(payload, cfg) or accept_action(payload, cfg) or tasks.accept_task_action(payload, cfg)
         if event:
             store.enqueue(event)

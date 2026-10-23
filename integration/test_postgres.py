@@ -18,6 +18,24 @@ class StorageTests(unittest.TestCase):
             sslmode='verify-full',sslrootcert='/app/rds-ca.pem')
         self.store=PostgresStore(self.connection,'test:'+uuid.uuid4().hex)
 
+    def test_fresh_boundary_persists_and_cannot_change_or_disappear(self):
+        from unittest.mock import patch
+        import fresh_start
+        with patch.dict(os.environ,POSTGRES_FRESH_START_AT='2026-10-23T16:00:00Z'):
+            self.parallel(lambda:fresh_start.pin_boundary(self.store))
+            fresh_start.pin_boundary(self.store)
+        with patch.dict(os.environ,POSTGRES_FRESH_START_AT='2026-10-24T16:00:00Z'):
+            with self.assertRaises(ValueError):fresh_start.pin_boundary(self.store)
+        with patch.dict(os.environ,{},clear=True):
+            with self.assertRaises(ValueError):fresh_start.pin_boundary(self.store)
+
+    def test_fresh_boundary_refuses_existing_jobs(self):
+        from unittest.mock import patch
+        import fresh_start
+        self.store.enqueue({'key':'existing','event_id':'existing'})
+        with patch.dict(os.environ,POSTGRES_FRESH_START_AT='2026-10-23T16:00:00Z'):
+            with self.assertRaises(ValueError):fresh_start.pin_boundary(self.store)
+
     def parallel(self, fn):
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             return list(pool.map(lambda _:fn(),range(8)))
