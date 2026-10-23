@@ -21,7 +21,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: repo:colby-runpod/partner-agent:ref:refs/heads/main
+                token.actions.githubusercontent.com:sub: repo:colby-runpod@298872542/partner-agent@1407628559:ref:refs/heads/main
       Policies:
         - PolicyName: ExistingStandbyDeployment
           PolicyDocument:
