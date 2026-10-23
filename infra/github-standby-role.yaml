@@ -46,6 +46,9 @@ Resources:
                   - ecs:DescribeServices
                 Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/default/team-partner-agent-a223
               - Effect: Allow
+                Action: ecs:RegisterTaskDefinition
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/default-team-partner-agent-a223:*
+              - Effect: Allow
                 Action: ecs:DescribeTaskDefinition
                 Resource: '*'
               - Effect: Allow
