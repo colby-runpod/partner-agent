@@ -80,3 +80,16 @@ restricted test is ready; run two polls and verify exactly one Slack receipt.
 
 AWS inspection on October 23 was blocked by an expired CLI session. No AWS
 resource, secret, runtime setting, or schema was changed during fixture preparation.
+
+## AWS read-only preflight result, October 23
+
+A one-off ECS task ran `scripts/check_aws_pilot.py` using secret references only.
+Slack identity matched the expected bot, Notion could read the cancelled OUT-22
+fixture, and the restricted database login connected over verified TLS. The
+schema is still missing `feedback`, `review_meta`, `reviews`, and
+`worker_ownership`; apply the additive migration before attempting the worker.
+Test-channel membership was unverified, which does not establish whether the bot
+is absent or the token lacks permission for channel inspection. Resolve before
+posting. The task exited with code 2 (preflight incomplete). Its task definition
+was deregistered and temporary access to all three secrets was removed. No Slack
+post, Notion write, or database write occurred.
