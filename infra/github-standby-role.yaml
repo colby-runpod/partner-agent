@@ -21,7 +21,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: repo:colby-runpod/partner-agent:ref:refs/heads/main
+                token.actions.githubusercontent.com:sub: repo:colby-runpod@298872542/partner-agent@1407628559:ref:refs/heads/main
       Policies:
         - PolicyName: ExistingStandbyDeployment
           PolicyDocument:
@@ -45,6 +45,9 @@ Resources:
                   - ecs:DescribeExpressGatewayService
                   - ecs:DescribeServices
                 Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/default/team-partner-agent-a223
+              - Effect: Allow
+                Action: ecs:RegisterTaskDefinition
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/default-team-partner-agent-a223:*
               - Effect: Allow
                 Action: ecs:DescribeTaskDefinition
                 Resource: '*'
