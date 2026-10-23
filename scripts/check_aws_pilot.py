@@ -1,6 +1,7 @@
 """Isolated read-only connectivity check; emits no tokens or message contents."""
 import json
 import os
+import re
 import urllib.request
 import psycopg
 
@@ -24,13 +25,16 @@ def main():
         identity=request('https://slack.com/api/auth.test',token,{})
         if not identity.get('ok') or identity.get('user_id')!='U0C7372ET45': raise ValueError()
         results['slack_identity']='PASS'
-        channel=request('https://slack.com/api/conversations.info',token,{'channel':CHANNEL})
+        results['slack_bot_username']=identity.get('user','')
+        results['slack_bot_user_id']=identity.get('user_id','')
+        channel=request('https://slack.com/api/conversations.info?channel='+CHANNEL,token)
         results['test_channel_membership']='PASS' if channel.get('ok') and channel['channel'].get('is_member') else 'UNVERIFIED'
         if not channel.get('ok'):
             error=channel.get('error')
             needed=channel.get('needed','').split(',')
+            results['token_granted_scopes']=[x for x in channel.get('provided','').split(',') if re.fullmatch(r'[a-z_]+(?::[a-z_]+)*',x)]
             results['channel_scopes_needed']=[x for x in needed if x in ('channels:read','groups:read','im:read','mpim:read')]
-            results['channel_check_reason']=error if error in ('missing_scope','channel_not_found','not_in_channel','invalid_auth') else 'other_api_error'
+            results['channel_check_reason']=error if isinstance(error,str) and re.fullmatch(r'[a-z_]{1,80}',error) else 'other_api_error'
         elif not channel['channel'].get('is_member'):
             results['channel_check_reason']='bot_not_member'
     except Exception:

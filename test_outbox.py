@@ -52,6 +52,37 @@ class OutboxTests(unittest.TestCase):
     def setup_box(self,pages):
         self.remote=Remote(pages); self.box=o.Outbox(self.temp.name+'/ledger.db',self.remote); return self.box
     def posts(self): return [p for method,p in self.remote.calls if method=='chat.postMessage']
+    def test_cutoff_excludes_old_equal_and_unknown_creation_times(self):
+        pages=[page(n) for n in range(1,6)]
+        for p,t in zip(pages,['2026-10-23T15:59:59Z','2026-10-23T16:00:00Z',None,'invalid','2026-10-23T10:00:01-06:00']):
+            if t: p['created_time']=t
+        with patch.dict(os.environ,OUTBOX_CREATED_AFTER='2026-10-23T16:00:00Z'):
+            self.setup_box(pages).poll()
+            self.box.poll()
+        self.assertEqual(len(self.posts()),1)
+        for p in pages[:-1]: self.assertEqual(self.remote.pages[p['id']],p)
+        self.assertEqual({id for id,_ in self.remote.writes},{pages[-1]['id']})
+
+    def test_cutoff_invalid_configuration_fails_closed(self):
+        for value in ('','2026-10-23','2026-10-23T16:00:00','bad'):
+            with patch.dict(os.environ,OUTBOX_CREATED_AFTER=value):
+                with self.assertRaises(ValueError): self.setup_box([])
+
+    def test_cutoff_rechecked_before_sending(self):
+        stale=page(); stale['created_time']='2026-10-23T16:00:01Z'
+        fresh=copy.deepcopy(stale); fresh['created_time']='2026-10-22T16:00:00Z'
+        with patch.dict(os.environ,OUTBOX_CREATED_AFTER='2026-10-23T16:00:00Z'):
+            box=self.setup_box([fresh]); box.post(stale)
+        self.assertEqual(self.posts(),[])
+        self.assertEqual(self.remote.writes,[])
+
+    def test_permalink_uses_query_parameters(self):
+        with patch.dict(os.environ,SLACK_BOT_TOKEN='test'), patch.object(o.Remote,'call',return_value={}) as call:
+            o.Remote().slack('chat.getPermalink',{'channel':'C1','message_ts':'123.456'})
+        args=call.call_args.args
+        self.assertEqual(args[1],'chat.getPermalink?channel=C1&message_ts=123.456')
+        self.assertEqual(args[2:4],('GET',None))
+
     def test_development_update_posts_once(self):
         p = page(kind='other', channel='C0C7R970C5T')
         box = self.setup_box([p]); box.poll(); box.poll()

@@ -9,6 +9,7 @@ import os
 import storage
 import re
 import sqlite3
+import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
@@ -104,6 +105,9 @@ class Remote:
             raise Rejected(re.sub(r'[^a-zA-Z0-9_]', '', str(result.get('error','slack_error')))[:100])
         return result
     def slack(self, method, data):
+        if method == 'chat.getPermalink':
+            return self.call('https://slack.com/api/', method+'?'+urllib.parse.urlencode(data),
+                             'GET',None,os.environ['SLACK_BOT_TOKEN'])
         return self.call('https://slack.com/api/',method,'POST',data,os.environ['SLACK_BOT_TOKEN'])
     def notion(self, method, path, data=None):
         return self.call('https://api.notion.com/v1/',path,method,data,os.environ['NOTION_TOKEN'],True)
@@ -128,11 +132,26 @@ class Outbox:
         raw = os.environ.get('OUTBOX_TEST_IDS')
         self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
         # A present but empty/malformed restriction fails closed during startup.
+        cutoff = os.environ.get('OUTBOX_CREATED_AFTER')
+        self.created_after = None if cutoff is None else self.timestamp(cutoff)
         if storage is not None: return
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS outbox_delivery (id TEXT PRIMARY KEY, snapshot TEXT NOT NULL, state TEXT NOT NULL, ts TEXT, decision TEXT, actor TEXT, at TEXT, error TEXT)')
             db.execute('CREATE INDEX IF NOT EXISTS outbox_ts ON outbox_delivery(ts)')
             db.execute('CREATE TABLE IF NOT EXISTS outbox_events (key TEXT PRIMARY KEY, payload TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)')
+    @staticmethod
+    def timestamp(value):
+        if not isinstance(value,str) or 'T' not in value:
+            raise ValueError('Outbox cutoff requires an ISO date-time with timezone')
+        parsed=dt.datetime.fromisoformat(value.replace('Z','+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError('Outbox cutoff requires a timezone')
+        return parsed
+    def eligible(self,page):
+        if not self.selected(page['id']): return False
+        if self.created_after is None: return True
+        try: return self.timestamp(page.get('created_time')) > self.created_after
+        except (ValueError,TypeError): return False
     def selected(self, id):
         return self.test_ids is None or str(uuid.UUID(id)) in self.test_ids
     def verify(self):
@@ -230,7 +249,7 @@ class Outbox:
             except Exception:
                 print('Outbox row processing failed; retained for reconciliation.',flush=True)
     def post(self,page):
-        if not self.selected(page['id']): return
+        if not self.eligible(page): return
         self.verify()
         r=row(page)
         if page.get('archived') or page.get('in_trash') or r['status']!='Queued': return
@@ -267,6 +286,7 @@ class Outbox:
             self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich(str(e))});return
         # Recheck cancellation immediately before taking the irreversible send fence.
         fresh = self.remote.get(r['id'])
+        if not self.eligible(fresh): return
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
         if not self.claim_send(r): return
         for attempt in range(2):

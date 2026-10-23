@@ -124,3 +124,30 @@ canonical row fingerprints as well as counts. Reports always leave cutover
 readiness false; matching snapshots do not establish that old writers stopped or
 that PostgreSQL contains the same history. No usable local agent backup was found
 during the October 22 check. PostgreSQL import is not implemented by this tool.
+
+### Forward-only outbox rollout preparation
+
+`OUTBOX_CREATED_AFTER` optionally takes an ISO 8601 date-time with a timezone.
+Only rows whose Notion `created_time` is strictly later may acquire a new send
+fence. Rows at/before the cutoff, or without a valid creation timestamp, are
+skipped without writes. The check runs again immediately before claiming a send.
+Already-owned delivery receipts can still finish writeback. `OUTBOX_TEST_IDS`
+remains an additional restriction, not an override of the cutoff.
+
+Choose and record the exact UTC cutoff at activation; do not use a moving value
+such as today's date on each deploy. Preserve it across restarts. Editing or
+re-queuing an old row does not make it eligible. Copying an old row into a new
+page does, so legacy requests must not be recreated automatically by the intake
+pipeline. The cutoff does not itself recover history or enable PostgreSQL.
+
+Remaining activation work:
+1. Implement an explicit fresh-start mode with a persistent recorded cutoff and
+   receive-time/event-time restrictions for inbound Slack events. Do not assert
+   POSTGRES_STATE_READY simply because an outbox cutoff exists.
+2. Confirm old writers are stopped, and reference the rotated Slack signing
+   secret and model key for the signed receiver and review processing. Only the
+   Slack bot, Notion and database runtime secrets were exercised by OUT-22.
+3. Merge reviewed application changes and deploy the immutable image in standby.
+4. Verify Slack event/interactivity URLs, restricted production credentials,
+   single-worker ownership and a new post-cutoff acceptance fixture before
+   enabling normal traffic. Preserve OUT-1 through OUT-21 as historical work.

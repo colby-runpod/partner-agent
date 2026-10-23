@@ -109,3 +109,40 @@ conversation type, not a requirement to grant all four. For the test channel use
 Reauthorize the app after adding the appropriate scope, and update the AWS token
 secret if Slack issues a different bot token. OUT-22 remains Cancelled; no posting
 or queue release occurred.
+
+## Updated token check, October 23
+
+After the user reauthorized Slack, the missing-scope response stopped. The
+read-only channel lookup was corrected to send its channel parameter using GET;
+the previous JSON POST produced `invalid_arguments` once scope validation passed.
+The corrected lookup now returns `channel_not_found` for C0C7R970C5T with the
+expected bot identity. This does not distinguish private-channel membership from
+an incorrect/inaccessible channel. Confirm the channel and add the bot before the
+live fixture test. Notion and database checks pass, and all seven tables exist.
+OUT-22 remains Cancelled; no message was sent. Temporary task access was removed.
+
+## Isolated live test passed, October 23
+
+After channel membership was granted, all read-only preflight checks passed.
+The first isolated attempt stopped before writing because the fixture-creation
+connector had removed the two literal Slack formatting asterisks. Read-only
+inspection confirmed Cancelled status, no timestamp and no database receipt.
+The runner accepts only that exact synthetic text variant and writes the intended
+literal mrkdwn with the Notion API when queuing the fixture.
+
+The subsequent task exited 0: one chat.postMessage call, PostgreSQL receipt
+persisted, Notion Status=Posted with Message TS and permalink, and the Slack
+message read back with matching bot identity and text. A new worker session
+polled again and processed a stale queued copy without another post call.
+
+Receipt: 1792774931.154469
+Message: https://runpod-team.slack.com/archives/C0C7R970C5T/p1792774931154469
+
+The runner uses a separate `pilot-OUT22-20261023` database namespace, restricts
+all Notion reads/writes to OUT-22, and uses GET for Slack read methods. It was
+packaged with the current storage/outbox modules into a temporary zip loaded by
+the existing database-bootstrap image. This verifies the isolated application
+path, not deployment of the production image. No historical rows were released,
+and POSTGRES_STATE_READY was not set. The one-off definition was deregistered
+and temporary secret access removed. Production rollout and historical recovery
+remain separate outstanding work. The 24 outbox unit tests also passed.
