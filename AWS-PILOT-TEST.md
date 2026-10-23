@@ -53,3 +53,30 @@ verification are still required and are not implemented by this checker.
 
 A successful infrastructure deployment is not permission to release the real
 queue. No AWS settings or schema were changed during this preparation.
+
+## Fresh test fixture prepared October 23
+
+A new synthetic outbox fixture was created and left Cancelled:
+https://app.notion.com/p/402ff732fc3481d885e3f6c01f1b2fdd
+
+Its only permitted posting channel is C0C7R970C5T (the review/test channel), its
+kind is `other`, and it has no mentions, related intake, or invitation buttons.
+For the isolated test, the exact restriction must be:
+
+```
+OUTBOX_TEST_IDS=402ff732-fc34-81d8-85e3-f6c01f1b2fdd
+```
+
+Do not remove this restriction or add OUT-1 through OUT-21. OUT-12 and OUT-13
+already have matching Slack posts despite their missing Notion receipts; the
+other historical rows remain outside the test. Do not infer recovered ledger
+ownership from those search results.
+
+Keep this fixture Cancelled until the isolated task is configured and its identity,
+private database access, updated schema, and restrictions are verified. An isolated
+synthetic test must not assert that production historical state has been recovered.
+The main service stays in standby. Change only this fixture to Queued when the
+restricted test is ready; run two polls and verify exactly one Slack receipt.
+
+AWS inspection on October 23 was blocked by an expired CLI session. No AWS
+resource, secret, runtime setting, or schema was changed during fixture preparation.
