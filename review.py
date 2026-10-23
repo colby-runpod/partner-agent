@@ -181,7 +181,15 @@ Return exactly this JSON shape:
 
 SCREENING_INSTRUCTIONS = '''
 Additional screening v2 fields supersede older scoring implications, not the existing JSON fields.
-Add a screening object with scores {A,S,I,C,V} as integers 0-3:
+The final JSON MUST include this nested object in addition to every field above:
+"screening": {"scores": {"A": 0, "S": 0, "I": 0, "C": 0, "V": 0},
+ "risk": "none", "risk_evidence": "", "wrong_door": "",
+ "predevelopment_supply": false, "blank_payload": false, "hubspot_checked": false,
+ "own_domain": false, "teammate_referred": false, "unverifiable": false,
+ "research": {"registry": "", "linkedin": "", "directories": "", "press": "", "gmail": "unavailable"}}
+Replace the example scores with evidence-based integers 0-3. Keep the exact uppercase keys
+A, S, I, C, V inside screening.scores; never flatten them or use strings or score objects.
+Use the following scoring definitions:
 A ask: 0 blank/boilerplate, 1 generic, 2 specific motion, 3 named customer/deal/volume or built integration.
 S substance: 0 no evidence/mismatched domain, 1 own site/GitHub only or unknown small software firm,
 2 one independent source, 3 several independent sources/funding/named customers/cloud-partner listing.
@@ -933,8 +941,8 @@ class ReviewClients:
              'unfurl_links': False, 'unfurl_media': False})
 
 
-FAILED = ('I could not complete a review of this submission. Check the Anthropic key, model and web '
-          'search access in Railway. Nothing else was affected; the Notion pipeline still runs as normal.')
+FAILED = ('I could not complete this review. An operator needs to check the review service in AWS. '
+          'No qualification decision was produced. The status of the separate Notion pipeline was not checked.')
 THREAD_UNREADABLE = ("I couldn't read the first message of this thread. Check that I'm in this channel and have "
                      'history access, then tag me again.')
 NOT_DIGEST = ("This thread doesn't start with a HubSpot partnership digest, so there's nothing for me to review. "
