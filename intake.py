@@ -5,8 +5,11 @@ import hmac
 import html
 import json
 import os
+import storage
+import fresh_start
 from pathlib import Path
 import re
+from storage_errors import StorageUnavailable
 import sqlite3
 import time
 import urllib.error
@@ -301,18 +304,20 @@ class Application:
             if not self.cfg['enabled']:
                 return respond('503 Service Unavailable', {'error': 'intake_disabled'})
             if body.get('type') == 'event_callback':
+                if not fresh_start.allows_event(body):
+                    return respond('200 OK', {'ok': True})
                 event = self.event_filter(body, self.cfg)
                 if event:
                     self.store.enqueue(event)
             return respond('200 OK', {'ok': True})
         except (ValueError, TypeError, KeyError, AttributeError):
             return respond('400 Bad Request', {})
-        except sqlite3.Error:
+        except (sqlite3.Error, StorageUnavailable):
             return respond('503 Service Unavailable', {'error': 'queue_unavailable'})
 
 
 def create_app():
-    return Application(load_config(), Store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')))
+    return Application(load_config(), storage.make_store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')))
 
 
 def worker():
@@ -320,10 +325,7 @@ def worker():
     cfg = load_config()
     if not cfg['enabled']:
         raise SystemExit('Set INTAKE_ENABLED=true after deployment setup to run the worker.')
-    store = Store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3'))
-    # One worker per persistent database; OS releases this lock on crashes.
-    with open(store.path + '.worker.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with storage.worker_store(os.environ.get('INTAKE_DB', 'state/intake.sqlite3')) as store:
         clients = Clients(cfg)
         while True:
             job = store.next_job()

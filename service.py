@@ -14,6 +14,10 @@ def main():
         from standby import serve
         serve()
         return
+    import storage
+    storage.backend()  # Reject typos before launching child processes.
+    if storage.backend() == 'postgres':
+        storage.make_store(None)  # Validate configuration and schema before any processing.
     chat = os.environ.get('CHAT_ENABLED') == 'true'
     review = os.environ.get('REVIEW_ENABLED') == 'true'
     outbox = os.environ.get('OUTBOX_ENABLED') == 'true'

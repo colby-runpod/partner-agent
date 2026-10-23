@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private PostgreSQL pilot for the Runpod partner agent. Does not activate processing.
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  AgentSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  EngineVersion:
+    Type: String
+  MultiAZ:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+Conditions:
+  UseMultiAZ: !Equals [!Ref MultiAZ, 'true']
+Resources:
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access only from the partner agent service
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AgentSecurityGroupId
+  DatabaseSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Existing agent VPC subnets; database has no public address
+      SubnetIds: !Ref SubnetIds
+  DatabaseParameters:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Require TLS for partner agent database connections
+      Family: postgres17
+      Parameters:
+        rds.force_ssl: '1'
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: team-partner-agent-pilot
+      DBName: partneragent
+      Engine: postgres
+      EngineVersion: !Ref EngineVersion
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      PubliclyAccessible: false
+      MultiAZ: !If [UseMultiAZ, true, false]
+      MasterUsername: agent_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnets
+      DBParameterGroupName: !Ref DatabaseParameters
+      VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+      BackupRetentionPeriod: 7
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      EnableCloudwatchLogsExports: [postgresql]
+      Tags:
+        - Key: Application
+          Value: team-partner-agent
+        - Key: Stage
+          Value: pilot
+Outputs:
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  AdminSecretArn:
+    Description: Bootstrap only. Create separate restricted runtime credentials before activation.
+    Value: !GetAtt Database.MasterUserSecret.SecretArn

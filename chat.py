@@ -2,6 +2,7 @@
 import html
 import json
 import os
+import storage
 import re
 import time
 import urllib.parse
@@ -52,7 +53,7 @@ def accept(body, cfg):
 
 def create_app():
     cfg = config()
-    return Application(cfg, Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
+    return Application(cfg, storage.make_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
 
 
 class ChatClients:
@@ -145,9 +146,7 @@ def worker():
     cfg = config()
     if not cfg['enabled']:
         raise SystemExit('CHAT_ENABLED must be true')
-    store = Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3'))
-    with open(store.path + '.worker.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with storage.worker_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')) as store:
         clients = ChatClients()
         while True:
             job = store.next_job()

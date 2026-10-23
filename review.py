@@ -35,7 +35,10 @@ import datetime as dt
 import html
 import json
 import os
+import storage
+import fresh_start
 import re
+from storage_errors import StorageUnavailable
 import sqlite3
 import time
 import urllib.error
@@ -343,7 +346,7 @@ def accept(body, cfg):
 
 def create_app():
     cfg = config()
-    app = Application(cfg, Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
+    app = Application(cfg, storage.make_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
 
     def wsgi(env, start):
         if env.get('PATH_INFO') == '/healthz' and env.get('REQUEST_METHOD') == 'GET':
@@ -380,13 +383,15 @@ def interactions(env, start, cfg, store):
         if not verify(cfg['secret'], env.get('HTTP_X_SLACK_REQUEST_TIMESTAMP'), env.get('HTTP_X_SLACK_SIGNATURE'), raw):
             return respond('401 Unauthorized')
         payload = json.loads(urllib.parse.parse_qs(raw.decode())['payload'][0])
+        if not fresh_start.allows_action(payload):
+            return respond('200 OK')
         event = outbox.action(payload, cfg) or accept_action(payload, cfg) or tasks.accept_task_action(payload, cfg)
         if event:
             store.enqueue(event)
         return respond('200 OK')
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return respond('400 Bad Request')
-    except sqlite3.Error:
+    except (sqlite3.Error, StorageUnavailable):
         return respond('503 Service Unavailable')
 
 
@@ -750,10 +755,10 @@ class Ledger:
         """The latest successful review behind a card, or behind a digest thread."""
         with self._db() as db:
             if card_ts:
-                row = db.execute("SELECT * FROM reviews WHERE card_ts=? AND outcome='ok'", (card_ts,)).fetchone()
+                row = db.execute("SELECT * FROM reviews WHERE card_ts=? AND outcome='ok' AND (? IS NULL OR channel=?)", (card_ts,channel,channel)).fetchone()
             else:
-                row = db.execute("SELECT * FROM reviews WHERE ts=? AND outcome='ok' ORDER BY created DESC LIMIT 1",
-                                 (thread_ts,)).fetchone()
+                row = db.execute("SELECT * FROM reviews WHERE ts=? AND outcome='ok' AND (? IS NULL OR channel=?) ORDER BY created DESC LIMIT 1",
+                                 (thread_ts,channel,channel)).fetchone()
             return dict(row) if row else None
 
     def feedback(self, fid, review_key, user, vote, value='', now=None):
@@ -1040,7 +1045,7 @@ def with_prior(text, ledger, clients, event):
     if not isinstance(review, dict):
         return text
     try:
-        prev = ledger.find(thread_ts=event['thread_ts'])
+        prev = ledger.find(thread_ts=event['thread_ts'], channel=event['channel'])
     except Exception:
         return text
     if not prev:
@@ -1276,9 +1281,9 @@ def process_feedback(store, job, clients, ledger):
     store.update(key, state='done')
     try:
         if event['vote'] == 'correct':
-            row = ledger.find(thread_ts=event['thread_ts'])
+            row = ledger.find(thread_ts=event['thread_ts'], channel=event['channel'])
         else:
-            row = ledger.find(card_ts=event['card_ts'])
+            row = ledger.find(card_ts=event['card_ts'], channel=event['channel'])
         if not row:
             return  # Not one of our reviewed cards; nothing to log.
         if event.get('removed'):
@@ -1398,15 +1403,13 @@ def worker():
     cfg = config()
     if not cfg['enabled']:
         raise SystemExit('CHAT_ENABLED or REVIEW_ENABLED must be true')
-    store = Store(os.environ.get('CHAT_DB', '/data/chat.sqlite3'))
-    ledger = Ledger(store.path)
-    with open(store.path + '.worker.lock', 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with storage.worker_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')) as store:
+        ledger = storage.make_ledger(store)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None
         agent_writer = task_writer if cfg.get('tasks_enabled') else None
-        delivery = outbox.Outbox(store.path) if cfg.get('outbox_enabled') else None
+        delivery = storage.make_outbox(store) if cfg.get('outbox_enabled') else None
         while True:
             job = store.next_job()
             if not job:
@@ -1415,12 +1418,14 @@ def worker():
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action'):
                 try:
-                    if delivery:
-                        delivery.enqueue_event(json.loads(job['payload']))
+                    if not delivery:
+                        raise RuntimeError('Outbox processing is disabled')
+                    delivery.enqueue_event(json.loads(job['payload']))
                     store.update(job['key'], state='done')
                 except Exception:
                     # Accepted decisions are durable and reconciled by the next poll.
-                    store.update(job['key'], state='failed', error='Outbox event failed; inspect delivery ledger')
+                    store.update(job['key'], error='Outbox handoff pending; retry required')
+                    time.sleep(1)
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual'):
                 process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'feedback':
