@@ -93,3 +93,19 @@ is absent or the token lacks permission for channel inspection. Resolve before
 posting. The task exited with code 2 (preflight incomplete). Its task definition
 was deregistered and temporary access to all three secrets was removed. No Slack
 post, Notion write, or database write occurred.
+
+## Migration completed and remaining Slack scope gate
+
+The additive migration task completed successfully on October 23 using only
+migration and runtime credentials. All seven tables passed runtime access checks;
+DELETE remains denied and TLS verification passed. No business rows were changed.
+Temporary secret access was removed and the task definition deregistered.
+
+The subsequent preflight reports no missing tables. Slack `conversations.info`
+returns `missing_scope` and lists `channels:read,groups:read,mpim:read,im:read` as
+its accepted conversation-type scopes. These are alternatives depending on the
+conversation type, not a requirement to grant all four. For the test channel use
+`channels:read` if public or `groups:read` if private; DM scopes are unnecessary.
+Reauthorize the app after adding the appropriate scope, and update the AWS token
+secret if Slack issues a different bot token. OUT-22 remains Cancelled; no posting
+or queue release occurred.

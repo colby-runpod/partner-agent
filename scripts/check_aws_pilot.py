@@ -26,6 +26,13 @@ def main():
         results['slack_identity']='PASS'
         channel=request('https://slack.com/api/conversations.info',token,{'channel':CHANNEL})
         results['test_channel_membership']='PASS' if channel.get('ok') and channel['channel'].get('is_member') else 'UNVERIFIED'
+        if not channel.get('ok'):
+            error=channel.get('error')
+            needed=channel.get('needed','').split(',')
+            results['channel_scopes_needed']=[x for x in needed if x in ('channels:read','groups:read','im:read','mpim:read')]
+            results['channel_check_reason']=error if error in ('missing_scope','channel_not_found','not_in_channel','invalid_auth') else 'other_api_error'
+        elif not channel['channel'].get('is_member'):
+            results['channel_check_reason']='bot_not_member'
     except Exception:
         results['slack_identity']='FAIL: check token and bot identity'
     try:
