@@ -1,0 +1,101 @@
+"""Explicit Colby-approved Slack intake and durable specialist handoffs."""
+import hashlib
+import html
+import json
+import re
+import time
+from intake import flatten
+
+COLBY = 'U0BEHPEJA6L'
+FORWARD_CHANNEL = 'C0C7HG8KYFL'
+REACTION = 'green-bubble-check'
+
+
+def accept_forward(body, cfg):
+    if not cfg.get('forward_enabled') or not cfg.get('review_enabled'):
+        return None
+    if body.get('team_id') != cfg['team_id'] or body.get('api_app_id') != cfg['app_id'] or not body.get('event_id'):
+        return None
+    e = body.get('event', {})
+    # Mention and reaction must be Colby's. Re-fetch the original message before processing.
+    if e.get('type') == 'app_mention' and e.get('user') == COLBY and not e.get('bot_id'):
+        channel, ts = e.get('channel'), e.get('ts')
+    elif e.get('type') == 'reaction_added' and e.get('user') == COLBY and e.get('reaction') == REACTION:
+        item = e.get('item', {})
+        if item.get('type') != 'message': return None
+        channel, ts = item.get('channel'), item.get('ts')
+    elif e.get('type') == 'message' and e.get('subtype') == 'message_changed':
+        msg = e.get('message', {})
+        if msg.get('user') != COLBY or (msg.get('edited') or {}).get('user') != COLBY: return None
+        channel, ts = e.get('channel'), msg.get('ts')
+    else:
+        return None
+    if channel != FORWARD_CHANNEL or not re.fullmatch(r'\d+\.\d+', ts or ''): return None
+    return dict(kind='forward_check', key='forward-check:'+body['event_id'], event_id=body['event_id'],
+                channel=channel, ts=ts, thread_ts=ts)
+
+
+def process_forward(store, job, clients, cfg):
+    event = json.loads(job['payload'])
+    msg = clients.forward_message(event)
+    # Attachment contents cannot authorize intake; the actual message must mention our bot.
+    approved = (msg.get('user') == COLBY and '<@'+cfg['bot_user']+'>' in msg.get('text', '')
+                and any(r.get('name') == REACTION and COLBY in r.get('users', []) for r in msg.get('reactions', [])))
+    if approved:
+        key = ':'.join((cfg['team_id'], event['channel'], event['ts']))
+        store.enqueue(dict(event, kind='review_forward', key=key, event_id='forward:'+key,
+                           user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], text=flatten(msg)[:20000], source_type='slack_forward'))
+    store.update(job['key'], state='done')
+
+
+def safe(value, limit=1800):
+    # Only configured owners may be mentioned. Model/source text is never Slack markup.
+    return html.escape(str(value or 'Not stated')[:limit], quote=False)
+
+
+def handoff(review, event, cfg):
+    if not cfg.get('routing_enabled'): return None
+    tier = (review.get('screening') or {}).get('tier')
+    route = review.get('route')
+    signals = review.get('signals') or {}
+    if signals.get('blocker') or signals.get('already_in_play'): return None
+    if route == 'Supply Team' and tier in ('Act now', 'Qualify'):
+        channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
+    elif route == 'Events/Sponsorship' and tier in ('Act now', 'Qualify', 'Route'):
+        channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
+    else: return None
+    # One specialist handoff per contact/route, including repeated submissions across sources.
+    identity = str(review.get('email') or review.get('company') or '').strip().casefold()
+    if identity in ('', 'not stated', 'unknown', 'n/a'):
+        identity = event['key']
+    key = 'handoff:'+hashlib.sha256((route+'|'+identity).encode()).hexdigest()
+    source = event.get('source_url')
+    if not source:
+        source = 'https://slack.com/archives/%s/p%s' % (event['channel'], event['ts'].replace('.', ''))
+    if not re.fullmatch(r'https://(?:slack\.com/archives/[A-Z0-9]+/p[0-9]+|mail\.google\.com/mail/u/[^\s<>]+)', source):
+        raise ValueError('Invalid handoff source')
+    motion = review.get('dean_motion') if route == 'Supply Team' else review.get('event_motion')
+    text = greeting+'\nQuick details:\n'+ '\n'.join('• %s: %s' % (label,safe(value)) for label,value in (
+        ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
+        ('Region',review.get('region')),('Motion',motion or review.get('summary'))))
+    text += '\n• Source: <%s|Original request>' % source
+    # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
+    crm = re.search(r'https://app\.hubspot\.com/contacts/[0-9]+/(?:contact|record/0-1)/[0-9]+', event.get('text', ''))
+    text += ('\n• HubSpot: <%s|Contact record (source link)>' % crm.group(0) if crm else '\n• HubSpot: Not provided in the source')
+    return dict(kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
+
+
+def process_handoff(store, job, clients):
+    # Commit the send intent before the network call. Never retry an uncertain send.
+    if job['state'] != 'pending':
+        store.update(job['key'], state='done', error='handoff_send_unconfirmed')
+        return
+    event=json.loads(job['payload'])
+    store.update(job['key'],state='writing')
+    try:
+        ts=clients.send_handoff(event)
+        if not ts: raise ValueError('Missing Slack receipt')
+    except Exception:
+        store.update(job['key'],state='done',error='handoff_send_unconfirmed')
+    else:
+        store.update(job['key'],state='done',ref=ts,result_url='https://slack.com/archives/%s/p%s'%(event['channel'],ts.replace('.','')))
