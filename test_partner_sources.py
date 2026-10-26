@@ -16,6 +16,10 @@ def approval_event(kind):
 
 class Sources(unittest.TestCase):
     def test_gate_only_colby_channel_emoji(self):
+        self.assertEqual(src.REACTION, 'eyes')
+        old = approval_event('reaction_added')
+        old['event']['reaction'] = 'green-bubble-check'
+        self.assertIsNone(src.accept_forward(old, CFG))
         for kind in ('app_mention','reaction_added'):
             b=approval_event(kind);self.assertIsNotNone(src.accept_forward(b,CFG))
             b['event']['user']='UOTHER';self.assertIsNone(src.accept_forward(b,CFG))

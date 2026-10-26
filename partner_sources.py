@@ -8,7 +8,7 @@ from intake import flatten
 
 COLBY = 'U0BEHPEJA6L'
 FORWARD_CHANNEL = 'C0C7HG8KYFL'
-REACTION = 'green-bubble-check'
+REACTION = 'eyes'
 
 
 def accept_forward(body, cfg):
