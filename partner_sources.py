@@ -57,7 +57,8 @@ def handoff(review, event, cfg):
     if not cfg.get('routing_enabled'): return None
     tier = (review.get('screening') or {}).get('tier')
     route = review.get('route')
-    if (review.get('signals') or {}).get('blocker'): return None
+    signals = review.get('signals') or {}
+    if signals.get('blocker') or signals.get('already_in_play'): return None
     if route == 'Supply Team' and tier in ('Act now', 'Qualify'):
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
     elif route == 'Events/Sponsorship' and tier in ('Act now', 'Qualify', 'Route'):

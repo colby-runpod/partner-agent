@@ -36,3 +36,11 @@ Keep the production fresh-start timestamp and OUTBOX_TEST_IDS unchanged. New spe
 - Events: https://runpod-team.slack.com/archives/C0CAKA6PW8K/p1793041671257459
 
 These establish identity, mentions and destination access, not end-to-end automatic routing. Test a fresh HubSpot form; forward a synthetic request and apply both controls in either order; test one newly labeled email after baseline; verify one card and one eligible handoff despite event retries.
+
+## Agreed activation scope (October 26)
+
+Claude owns Partner Inbound Gmail capture and Gmail-origin specialist handoffs; the user confirms its task has been updated. Keep GMAIL_INTAKE_ENABLED=false in AWS and do not add Gmail credentials. AWS owns Slack signup reviews and approved forwards. Cross-system duplicate detection is not guaranteed by the AWS queue; Claude must check existing records and handoffs.
+
+Research/University handoffs remain disabled. The intended destination is C0CCBS9NU2V, with Zoe McKinley as owner after her Slack identity is verified on or after November 2. Research requests must not fall through to the events channel. Existing research qualification cards can still be generated.
+
+Specialist routing skips reviews marked already_in_play as well as blocked reviews.

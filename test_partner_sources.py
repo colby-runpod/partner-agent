@@ -57,6 +57,8 @@ class Sources(unittest.TestCase):
         for tier in ('DQ','Hold for Colby','Needs research','Route'):
             self.assertIsNone(src.handoff(dict(r,screening={'tier':tier}),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'blocker':'risk'}),e,CFG))
+        self.assertIsNone(src.handoff(dict(r,signals={'already_in_play':True}),e,CFG))
+        self.assertIsNone(src.handoff(dict(r,route='Research/University'),e,CFG))
         ev=src.handoff(dict(r,route='Events/Sponsorship',screening={'tier':'Route'}),e,CFG)
         self.assertIn('<@U0AB1TSBK5X>',ev['text']);self.assertIn('<@U0APRAUGJ6P>',ev['text'])
 
