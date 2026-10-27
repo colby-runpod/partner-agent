@@ -163,7 +163,7 @@ company ("not_configured" or "unavailable" if the lookup did not run). Never inv
 
 Writing rules: every field short and complete, never cut off. Each check note is ONE sentence under
 160 characters; summary and why are at most two sentences under 300 characters each and why explains
-the evidence without naming a score or decision; next_step under 220 characters; at most 3 risks under
+the evidence without naming a score or decision; next_step: one direct action, under 140 characters; at most 3 risks under
 100 characters each; source titles under 50 characters. Address the reader as "you" and never refer to
 Colby or any Runpod teammate by name as the decision-maker. Plain text only: no citation tags, no
 markdown, no long quotations.
@@ -668,11 +668,14 @@ def render_history(history):
 
 
 def render(review, history=None, draft_list=()):
-    top = '%s  ·  Score %s  ·  %s' % (DECISIONS[review['decision']], review['score'], review['route'])
-    if review['headline']:
-        top += '  ·  ' + review['headline']
-    lines = [top, '', '*Partner review · %s*' % review['company'],
-             '*Contact* %s  |  *Type* %s' % (review['contact'], review['partnership_type'])]
+    lines = ['*Partner review · %s*' % review['company'], '']
+    lines += ['• *%s:* %s' % (label, value or 'Not stated') for label, value in (
+        ('Company', review['company']), ('Contact', review['contact']),
+        ('Email', partner_sources.safe(review.get('email'))), ('Region', partner_sources.safe(review.get('region'))),
+        ('Lead score', partner_sources.score_badge(review)),
+        ('Assessment', partner_sources.assessment(review)), ('Route', review['route']))]
+    if review.get('headline'):
+        lines += ['', review['headline']]
     if review['summary']:
         lines += ['', review['summary']]
     lines += ['', '*Checks*']
@@ -690,7 +693,9 @@ def render(review, history=None, draft_list=()):
         step = review['next_step']
     if review.get('screening'):
         lines += ['', '*' + screening.notes(review['screening']) + '*']
-        step = review['next_step']
+        step = partner_sources.suggested_review(review)
+    if review['signals']['blocker'] or review['route'] in ('Supply Team', 'Events/Sponsorship'):
+        step = partner_sources.suggested_review(review)
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
         lines.append(':octagonal_sign: *Clear first:* ' + review['signals']['blocker'])
@@ -702,7 +707,7 @@ def render(review, history=None, draft_list=()):
         lines += ['', ':memo: *%s*' % label, body]
     if review['sources']:
         lines += ['', '*Sources* ' + '  ·  '.join('<%s|%s>' % s for s in review['sources'])]
-    lines += ['', '_Advisory only. Nothing was sent, and Notion and HubSpot were not changed._']
+    lines += ['', '_Advisory only. No prospect outreach or approval. Specialist handoffs are tracked separately._']
     return '\n'.join(lines)
 
 
@@ -920,6 +925,8 @@ class ReviewClients:
         else:
             message.update(channel=self.cfg['shadow_channel'], text='Shadow review of <%s|this submission>\n\n%s'
                            % (self.permalink(event['channel'], event['ts']), text))
+        if event.get('kind') in ('review', 'review_forward', 'review_email'):
+            message['text'] += '\n\ncc <@%s>' % partner_sources.COLBY
         if buttons:
             message['blocks'] = card_blocks(message['text'], buttons)
         self.last_posted_text = message['text']

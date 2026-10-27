@@ -85,6 +85,18 @@ class Sources(unittest.TestCase):
         for kind in ('review','review_forward'):
             client.post(dict(kind=kind,channel='CSOURCE',ts='100.1',thread_ts='100.1'),'result')
             self.assertEqual(api.call_args.args[2]['thread_ts'],'100.1')
+            self.assertTrue(api.call_args.args[2]['text'].endswith('cc <@'+src.COLBY+'>'))
         client.post(dict(kind='review_email',source_url='https://mail.google.com/mail/u/0/#all/abc'),'result')
         self.assertEqual(api.call_args.args[2]['channel'],'COUT')
         self.assertNotIn('thread_ts',api.call_args.args[2])
+
+class CardLayout(unittest.TestCase):
+    def test_score_and_assessment_follow_region(self):
+        for route in ('Supply Team', 'Events/Sponsorship'):
+            r=dict(route=route,screening={'tier':'Qualify'},score=2,decision='triage',region='US',signals={})
+            text=src.handoff(r,dict(key='k',channel='C123',ts='100.1'),CFG)['text']
+            self.assertIn('• *Region:* US\n• *Lead score:* 2️⃣ 2/5\n• *Assessment:* 🟡 Needs triage',text)
+            self.assertIn('*Suggested review:* Confirm',text)
+            self.assertTrue(text.endswith('cc <@'+src.COLBY+'>'))
+        self.assertEqual(src.score_badge({'score':'DQ'}),'DQ')
+        self.assertEqual(src.score_badge({}),'Not scored')

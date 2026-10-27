@@ -53,6 +53,32 @@ def safe(value, limit=1800):
     return html.escape(str(value or 'Not stated')[:limit], quote=False)
 
 
+def score_badge(review):
+    score = str(review.get('score', ''))
+    badges = dict(zip('12345', ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣')))
+    return badges[score]+' '+score+'/5' if score in badges else ('DQ' if score == 'DQ' else 'Not scored')
+
+
+def assessment(review):
+    if (review.get('signals') or {}).get('blocker'):
+        return '🔴 Hold - resolve blocker'
+    return {'pursue': '🟢 Pursue', 'triage': '🟡 Needs triage',
+            'redirect': '🔵 Point to self-serve', 'do_not_pursue': '🔴 Do not pursue'}.get(
+                review.get('decision'), '⚪ Not assessed')
+
+
+def suggested_review(review):
+    # One actionable sentence; never turn a risk or missing fact into an approval.
+    if (review.get('signals') or {}).get('blocker'):
+        return 'Resolve the flagged blocker before proceeding.'
+    route = review.get('route')
+    if route == 'Supply Team':
+        return 'Confirm available GPUs, site readiness and capacity before discussing fit.'
+    if route == 'Events/Sponsorship':
+        return 'Confirm the sponsorship ask, audience and decision deadline.'
+    return review.get('next_step') or 'Confirm the missing details before deciding.'
+
+
 def handoff(review, event, cfg):
     if not cfg.get('routing_enabled'): return None
     tier = (review.get('screening') or {}).get('tier')
@@ -77,8 +103,10 @@ def handoff(review, event, cfg):
     motion = review.get('dean_motion') if route == 'Supply Team' else review.get('event_motion')
     text = greeting+'\n\n'+ '\n'.join('• *%s:* %s' % (label,safe(value)) for label,value in (
         ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
-        ('Region',review.get('region'))))
+        ('Region',review.get('region')), ('Lead score',score_badge(review)),
+        ('Assessment',assessment(review))))
     text += '\n\n*Request & qualification*\n'+safe(motion or review.get('summary'))
+    text += '\n\n*Suggested review:* '+safe(suggested_review(review))
     text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = re.search(r'https://app\.hubspot\.com/contacts/[0-9]+/(?:contact|record/0-1)/[0-9]+', event.get('text', ''))
