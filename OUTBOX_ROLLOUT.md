@@ -49,3 +49,16 @@ Rollback: set OUTBOX_ENABLED=false. Existing digest reviews continue; queued row
 ## Isolated live acceptance
 
 Before enabling the worker, set `OUTBOX_TEST_IDS` to a comma-separated list of the exact Notion outbox page UUIDs approved for the test. All other rows remain untouched, including pending receipt writes and pickup callbacks. An empty or malformed value prevents startup. Do not remove this variable until the real queue rollout is authorized. Leave `SCREENING_V2_ENABLED` off during transport acceptance.
+
+## Claude weekly updates
+
+`WEEKLY_OUTBOX_ENABLED=true` enables only the weekly channel (`C0CARSDJ4H0`, #team-partnerships-weekly-update) alongside the existing explicit test-row restriction. Other queued items remain restricted, and `OUTBOX_CREATED_AFTER` still applies. Claude creates the content and one reusable outbox row per week; this worker does not generate or schedule the summary.
+
+Producer contract:
+- Title: `weekly-update-summary:YYYY-MM-DD` using that week's Monday date.
+- Channel ID: `C0CARSDJ4H0`; Kind: `other`; Status: `Queued`.
+- Body: final text, without Slack user/group/broadcast mention markup. Mention IDs and Thread TS must be empty.
+- Not Before: optional Monday-morning timestamp with timezone. If absent, a queued row posts on the next poll (normally within three minutes).
+- Message TS and Permalink start empty. The same row must be reused rather than creating duplicate rows for the same Monday; delivery deduplication is by row ID.
+
+Posts are top-level, without buttons or added mentions; Slack auto-mention parsing is disabled. Invalid rows become Failed with Error instead of silently changing the Body. Success writes Posted, Message TS, Permalink and Posted At. Saved receipts retry Notion writeback without reposting; uncertain sends are held for reconciliation. Thread replies and reactions in this channel are ignored. Weekly rows do not change the separate daily lead-summary schedule.

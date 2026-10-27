@@ -20,7 +20,8 @@ INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 COLBY = 'U0BEHPEJA6L'
 NOTION_COLBY = '38dd872b-594c-8152-9d06-0002630c4d98'
 BOT = 'U0C7372ET45'
-CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T'}
+WEEKLY_CHANNEL = 'C0CARSDJ4H0'
+CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T', WEEKLY_CHANNEL}
 ACTIONS = {'outbox_approve': 'Approve', 'outbox_decline': 'Decline', 'outbox_call': 'Call first'}
 KINDS = {'supply_lead', 'event_request', 'priority_alert', 'daily_digest', 'invitation_queue', 'other'}
 
@@ -47,6 +48,7 @@ def prop(page, key):
 
 def row(page):
     return dict(id=page['id'], channel=prop(page,'Channel ID'), body=prop(page,'Body'),
+                title=next((prop(page,k) for k,v in page.get('properties',{}).items() if v.get('type')=='title'),''),
                 kind=prop(page,'Kind'), mentions=prop(page,'Mention IDs'), thread=prop(page,'Thread TS'),
                 ts=prop(page,'Message TS'), status=prop(page,'Status'), before=prop(page,'Not Before'),
                 related=prop(page,'Related Intake') or [])
@@ -56,6 +58,18 @@ def payload(r):
         raise ValueError('channel not allowed')
     if r['kind'] not in KINDS or not r['body'] or len(r['body']) > 35000:
         raise ValueError('Invalid kind or message body')
+    if r['channel'] == WEEKLY_CHANNEL:
+        if r['kind'] != 'other' or r['mentions'].strip() or r['thread']:
+            raise ValueError('Weekly updates require Kind=other, empty Mention IDs and empty Thread TS')
+        match=re.fullmatch(r'weekly-update-summary:(\d{4}-\d{2}-\d{2})',r.get('title',''))
+        if not match:
+            raise ValueError('Weekly title must be weekly-update-summary:YYYY-MM-DD')
+        try: monday=dt.date.fromisoformat(match[1])
+        except ValueError: raise ValueError('Weekly title requires a valid Monday date') from None
+        if monday.weekday()!=0:
+            raise ValueError('Weekly title requires a Monday date')
+        if re.search(r'<@|<!(?:here|channel|everyone|subteam)(?:[>|^])',r['body'],re.I):
+            raise ValueError('Weekly Body must not contain Slack mentions; body was not changed')
     ids = [x.strip() for x in r['mentions'].split(',') if x.strip()]
     if any(not re.fullmatch(r'[UW][A-Z0-9]+', x) for x in ids):
         raise ValueError('Invalid mention ID')
@@ -66,6 +80,8 @@ def payload(r):
     text = (' '.join('<@%s>' % x for x in ids)+'\n' if ids else '') + r['body']
     p = dict(channel=r['channel'], text=text, mrkdwn=True, unfurl_links=False, unfurl_media=False,
              client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL, 'partner-outbox:'+r['id'])))
+    if r['channel'] == WEEKLY_CHANNEL:
+        p.update(parse='none',link_names=False)
     if r['thread']:
         p['thread_ts'] = r['thread']
     if r['kind'] == 'invitation_queue' and r['related']:
@@ -129,6 +145,7 @@ class Outbox:
     def __init__(self, path, remote=None, storage=None):
         self.path=path; self.remote=remote or Remote(); self.verified=False
         self.storage=storage
+        self.weekly_enabled = os.environ.get('WEEKLY_OUTBOX_ENABLED') == 'true'
         raw = os.environ.get('OUTBOX_TEST_IDS')
         self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
         # A present but empty/malformed restriction fails closed during startup.
@@ -148,11 +165,13 @@ class Outbox:
             raise ValueError('Outbox cutoff requires a timezone')
         return parsed
     def eligible(self,page):
-        if not self.selected(page['id']): return False
+        if not self.selected(page['id'], {'channel':prop(page,'Channel ID')}): return False
         if self.created_after is None: return True
         try: return self.timestamp(page.get('created_time')) > self.created_after
         except (ValueError,TypeError): return False
-    def selected(self, id):
+    def selected(self, id, snapshot=None):
+        if snapshot and snapshot.get('channel') == WEEKLY_CHANNEL:
+            return self.weekly_enabled
         return self.test_ids is None or str(uuid.UUID(id)) in self.test_ids
     def verify(self):
         if not self.verified:
@@ -197,8 +216,8 @@ class Outbox:
         with self.db() as db:
             return bool(db.execute("UPDATE outbox_delivery SET decision=?,actor=?,at=?,state='deciding' WHERE id=? AND decision IS NULL",(decision,actor,now(),id)).rowcount)
     def sync(self,d):
-        if not self.selected(d['id']): return
         r=json.loads(d['snapshot']); ts=d['ts']
+        if not self.selected(d['id'],r): return
         if not ts: return
         current=self.remote.get(r['id'])
         if current.get('archived') or current.get('in_trash') or prop(current,'Status')=='Cancelled':
@@ -270,6 +289,8 @@ class Outbox:
             if due > dt.datetime.now(dt.timezone.utc): return
         if r['channel'] not in CHANNELS:
             self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('channel not allowed')});return
+        if r['channel']==WEEKLY_CHANNEL and r['thread']:
+            self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Weekly updates require empty Thread TS')});return
         if r['thread'].startswith('parent:'):
             match=re.fullmatch(r'parent:OUT-(\d+)',r['thread'])
             if not match:
@@ -288,6 +309,7 @@ class Outbox:
         fresh = self.remote.get(r['id'])
         if not self.eligible(fresh): return
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
+        if r['channel']==WEEKLY_CHANNEL and row(fresh)!=r: return  # Revalidate edited weekly content on the next poll.
         if not self.claim_send(r): return
         for attempt in range(2):
             try:
@@ -313,8 +335,9 @@ class Outbox:
         self.verify()
         matches=self.matches(e['message_ts'])
         d=next((x for x in matches if json.loads(x['snapshot'])['channel']==e['channel']),None)
-        if not d or d['decision'] or not self.selected(d['id']): return
+        if not d or d['decision']: return
         r=json.loads(d['snapshot'])
+        if r['channel']==WEEKLY_CHANNEL or not self.selected(d['id'],r): return
         status = prop(self.remote.get(r['id']),'Status')
         if status == 'Queued' and d['state'] == 'sync':
             raise RuntimeError('Wait for publication writeback before pickup')
@@ -352,6 +375,7 @@ def accept(body,cfg):
     elif e.get('type')=='message' and not e.get('subtype') and e.get('thread_ts') and e['thread_ts']!=e.get('ts'):
         channel,ts=e.get('channel'),e['thread_ts']
     else: return
+    if channel==WEEKLY_CHANNEL: return  # Team feedback only; no bot processing.
     if channel not in CHANNELS or not re.fullmatch(r'\d+\.\d+',ts or ''): return
     if not owns(channel,ts): return
     key='outbox:'+body['event_id']
