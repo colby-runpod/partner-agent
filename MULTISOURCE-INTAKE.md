@@ -44,3 +44,12 @@ Claude owns Partner Inbound Gmail capture and Gmail-origin specialist handoffs; 
 Research/University handoffs remain disabled. The intended destination is C0CCBS9NU2V, with Zoe McKinley as owner after her Slack identity is verified on or after November 2. Research requests must not fall through to the events channel. Existing research qualification cards can still be generated.
 
 Specialist routing skips reviews marked already_in_play as well as blocked reviews.
+
+
+## Review-card routing actions
+
+New review cards include **Route to supply** and **Route to events** when specialist routing is enabled and the saved review has no spam, blocker or already-in-play flag. Only Colby can trigger these actions. A manual route may send a low-score lead; automatic tier thresholds remain unchanged.
+
+The buttons use the standard specialist template, mention the destination owners, and cc Colby. They share the automatic handoff deduplication key (contact + destination), so clicking again or routing an already-forwarded lead does not post another copy. The card shows the delivered message link or an unconfirmed status requiring reconciliation. Uncertain sends are never automatically retried.
+
+Older cards without saved routing evidence require a fresh review. Log in Notion and Park remain available; Draft in Gmail appears only when the review includes a suitable draft and email address. That action requests a draft through the Claude/Notion pipeline; it does not send email.

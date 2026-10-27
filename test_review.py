@@ -96,7 +96,7 @@ class CardTests(unittest.TestCase):
     def test_render_good_review(self):
         card = review.render(review.parse('Here you go: ' + json.dumps(GOOD) + ' done'))
         for part in ['• *Lead score:* 4️⃣ 4/5', '*Partner review · Example Inc*',
-                     'Pursue', 'Identity: verified - LinkedIn matches', 'Invite to apply',
+                     'Pursue', '*Identity:* verified - LinkedIn matches', 'Invite to apply',
                      '<https://example.com/registry|Registry>', 'Advisory only']:
             self.assertIn(part, card)
         self.assertNotIn('\u2014', card)

@@ -81,7 +81,8 @@ FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.
              'gmx.com', 'gmx.de', 'web.de', 'mail.com', 'mail.ru', 'yandex.ru', 'yandex.com', 'qq.com',
              '163.com', '126.com', 'naver.com', 'zoho.com', 'fastmail.com', 'hushmail.com', 'tutanota.com'}
 NOTION_VERSION = '2025-09-03'
-ACTIONS = {'log_notion': 'Log in Notion', 'draft_gmail': 'Draft in Gmail', 'park': 'Park'}
+ACTIONS = {'log_notion': 'Log in Notion', 'draft_gmail': 'Draft in Gmail', 'park': 'Park',
+           'route_supply': 'Route to supply', 'route_events': 'Route to events'}
 GMAIL_DRAFTS = ('Probe reply', 'Pointer reply')
 UP, DOWN = {'+1', 'thumbsup'}, {'-1', 'thumbsdown'}
 CORRECTION = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*(?:should\s+be|correct(?:ion)?\s*:?|actually)\s+'
@@ -425,6 +426,8 @@ def accept_action(payload, cfg):
     action = (payload.get('actions') or [{}])[0]
     channel, message = (payload.get('channel') or {}).get('id'), payload.get('message') or {}
     value, action_ts = str(action.get('value', '')), str(action.get('action_ts', ''))
+    if action.get('action_id') in ('route_supply', 'route_events') and user != partner_sources.COLBY:
+        return None
     if action.get('action_id') not in ACTIONS or not re.fullmatch(r'T\w+:C\w+:\d+\.\d+', value):
         return None
     if not channel or not re.fullmatch(r'\d+\.\d+', message.get('ts', '')) or not re.fullmatch(r'\d+\.\d+', action_ts):
@@ -676,14 +679,6 @@ def render(review, history=None, draft_list=()):
         ('Assessment', partner_sources.assessment(review)), ('Route', review['route']))]
     if review.get('headline'):
         lines += ['', review['headline']]
-    if review['summary']:
-        lines += ['', review['summary']]
-    lines += ['', '*Checks*']
-    for name in ('identity', 'company', 'fit', 'potential'):
-        verdict, note = review['checks'][name]
-        lines.append('• %s: %s%s' % (name.capitalize(), verdict, (' - ' + note) if note else ''))
-    if review['why']:
-        lines += ['', '*Why* ' + review['why']]
     if review['decision'] == 'do_not_pursue':
         step = 'No action.'
     elif review['decision'] == 'redirect':
@@ -692,13 +687,22 @@ def render(review, history=None, draft_list=()):
     else:
         step = review['next_step']
     if review.get('screening'):
-        lines += ['', '*' + screening.notes(review['screening']) + '*']
         step = partner_sources.suggested_review(review)
     if review['signals']['blocker'] or review['route'] in ('Supply Team', 'Events/Sponsorship'):
         step = partner_sources.suggested_review(review)
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
         lines.append(':octagonal_sign: *Clear first:* ' + review['signals']['blocker'])
+    if review['summary']:
+        lines += ['', review['summary']]
+    lines += ['', '*Checks*']
+    for name in ('identity', 'company', 'fit', 'potential'):
+        verdict, note = review['checks'][name]
+        lines.append('• *%s:* %s%s' % (name.capitalize(), verdict, (' - ' + note) if note else ''))
+    if review['why']:
+        lines += ['', '*Why* ' + review['why']]
+    if review.get('screening'):
+        lines += ['', '*' + screening.notes(review['screening']) + '*']
     if review['risks']:
         lines += ['', ':warning: *Risks*'] + ['• ' + r for r in review['risks']]
     lines += render_history(history)
@@ -752,7 +756,8 @@ class Ledger:
             if review:
                 keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
                                                'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
-                                               'next_step', 'headline', 'screening')}
+                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals')}
+                keep['source_event'] = dict(event)
                 keep['checks'] = r.get('checks', {})
                 keep['drafts'] = [list(d) for d in r.get('drafts', [])]
                 keep['blocker'] = (r.get('signals') or {}).get('blocker', '')
@@ -1139,6 +1144,12 @@ def action_buttons(cfg, data, done=()):
         out.append(('log_notion', key))
     if cfg.get('notion_write') and data.get('email') and gmail_draft(data) and 'draft_gmail' not in done:
         out.append(('draft_gmail', key))
+    signals = data.get('signals')
+    if cfg.get('routing_enabled') and isinstance(signals, dict) and not any(
+            signals.get(k) for k in ('spam', 'blocker', 'already_in_play')):
+        for aid in ('route_supply', 'route_events'):
+            if aid not in done:
+                out.append((aid, key))
     if 'park' not in done:
         out.append(('park', key))
     return out
@@ -1267,11 +1278,46 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
         done.add('log_notion')
     if any('Gmail draft requested' in n for n in notes):
         done.add('draft_gmail')
+    for aid in ('route_supply', 'route_events'):
+        if any(n.startswith('Supply handoff:' if aid == 'route_supply' else 'Event handoff:') for n in notes):
+            done.add(aid)
     if row.get('parked_by'):
         clients.ephemeral(event, 'This one is already parked.')
         return
     try:
-        if event['action'] == 'park':
+        if event['action'] in ('route_supply', 'route_events'):
+            if user != partner_sources.COLBY:
+                clients.ephemeral(event, 'Only Colby can route a lead.')
+                return
+            if (event['message_ts'] != row.get('card_ts') or
+                    event['channel'] not in (row['channel'], cfg.get('shadow_channel'))):
+                clients.ephemeral(event, 'That button does not match the saved review card.')
+                return
+            if not cfg.get('routing_enabled'):
+                clients.ephemeral(event, 'Specialist routing is turned off; nothing was sent.')
+                return
+            if not isinstance(data.get('signals'), dict) or not data.get('source_event'):
+                clients.ephemeral(event, 'This older card lacks saved routing details. Request a fresh review first.')
+                return
+            target = 'Supply Team' if event['action'] == 'route_supply' else 'Events/Sponsorship'
+            route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
+            if route_job is None:
+                clients.ephemeral(event, 'This lead is flagged as spam, blocked or already in play. Resolve that before routing.')
+                return
+            store.enqueue(route_job)
+            existing = store.get(route_job['key'])
+            if existing['state'] == 'pending':
+                partner_sources.process_handoff(store, existing, clients)
+                existing = store.get(route_job['key'])
+            if existing.get('ref') and existing.get('result_url'):
+                status = 'Delivered to '+target+' · <'+existing['result_url']+'|Open handoff>'
+            else:
+                status = 'Delivery unconfirmed for '+target+'; held for reconciliation. Do not resend.'
+            prefix = 'Supply handoff:' if event['action'] == 'route_supply' else 'Event handoff:'
+            notes = [n for n in notes if not n.startswith(prefix)]
+            notes.append(prefix+' '+status+' · requested by <@'+user+'>')
+            done.add(event['action'])
+        elif event['action'] == 'park':
             ledger.mark(row['key'], parked_by=user)
             notes.append(':double_vertical_bar: Parked by <@%s>' % user)
             done |= set(ACTIONS)
@@ -1308,8 +1354,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 done.add('draft_gmail')
     except Exception:
         print('Button action failed: %s' % event['action'], flush=True)
-        clients.ephemeral(event, "That didn't go through, and nothing was changed. Try again in a minute, or check "
-                                 'the Notion token and sharing in Railway.')
+        clients.ephemeral(event, "That didn't go through completely. Check the saved handoff or Notion receipt and AWS logs before retrying.")
         return
     ledger.mark(row['key'], notes=json.dumps(notes))
     try:

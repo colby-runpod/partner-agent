@@ -100,3 +100,88 @@ class CardLayout(unittest.TestCase):
             self.assertTrue(text.endswith('cc <@'+src.COLBY+'>'))
         self.assertEqual(src.score_badge({'score':'DQ'}),'DQ')
         self.assertEqual(src.score_badge({}),'Not scored')
+
+class RoutingActions(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.store=Store(self.tmp.name+'/db'); self.ledger=review.Ledger(self.store.path)
+        self.cfg=dict(CFG,interactive=True,feedback_users={src.COLBY},shadow_channel='COUT')
+        self.event=dict(key='T1:C123:100.1',event_id='e',kind='review',channel='C123',ts='100.1',thread_ts='100.1',text='Lead')
+        self.data=dict(company='Test',contact='Person',email='person@example.com',score='2',decision='do_not_pursue',
+                       route='Supply Team',screening={'tier':'Park'},signals={},region='US',summary='Small supplier')
+        self.save()
+        self.client=Mock(); self.client.send_handoff.return_value='200.1'
+
+    def save(self):
+        self.ledger.record(self.event['key'],self.event,self.data,'ok')
+        self.ledger.mark(self.event['key'],card_text='review')
+        self.ledger.delivered(self.event['key'],'sent',card_ts='100.2')
+
+    def act(self,action='route_supply',user=src.COLBY,ts='300.1'):
+        event=dict(kind='action',key='act:'+ts,event_id='act:'+ts,review_key=self.event['key'],
+                   action=action,user=user,channel='C123',message_ts='100.2')
+        self.store.enqueue(event)
+        review.process_action(self.store,self.store.get(event['key']),self.client,self.ledger,self.cfg)
+
+    def test_manual_low_score_routes_once_without_notion(self):
+        self.assertIsNone(src.handoff(self.data,self.event,self.cfg))
+        self.act(); self.act(ts='300.2')
+        self.client.send_handoff.assert_called_once()
+        sent=self.client.send_handoff.call_args.args[0]
+        self.assertEqual(sent['channel'],'C0CAL8C08RK')
+        self.assertIn('2️⃣ 2/5',sent['text'])
+        self.assertTrue(sent['text'].endswith('cc <@'+src.COLBY+'>'))
+        self.assertIn('Open handoff',self.ledger.review(self.event['key'])['notes'])
+
+    def test_event_destination_and_mentions(self):
+        self.act('route_events')
+        sent=self.client.send_handoff.call_args.args[0]
+        self.assertEqual(sent['channel'],'C0CAKA6PW8K')
+        self.assertIn('<@U0AB1TSBK5X>',sent['text']); self.assertIn('<@U0APRAUGJ6P>',sent['text'])
+        self.assertIn('Confirm the sponsorship ask',sent['text'])
+
+    def test_uncertain_send_is_never_retried_or_reported_delivered(self):
+        self.client.send_handoff.side_effect=TimeoutError()
+        self.act(); self.act(ts='300.2')
+        self.client.send_handoff.assert_called_once()
+        notes=self.ledger.review(self.event['key'])['notes']
+        self.assertIn('Delivery unconfirmed',notes); self.assertNotIn('Delivered to',notes)
+
+    def test_automatic_and_manual_share_receipt(self):
+        job=src.handoff(dict(self.data,screening={'tier':'Qualify'}),self.event,self.cfg)
+        self.store.enqueue(job); src.process_handoff(self.store,self.store.get(job['key']),self.client)
+        self.act(); self.client.send_handoff.assert_called_once()
+
+    def test_only_colby_and_no_spam_blocked_or_in_play(self):
+        self.act(user='UOTHER'); self.client.send_handoff.assert_not_called()
+        for i,signal in enumerate(('spam','blocker','already_in_play')):
+            self.data['signals']={signal:True}; self.save(); self.act(ts='400.'+str(i))
+        self.client.send_handoff.assert_not_called()
+
+    def test_old_card_missing_signals_cannot_route(self):
+        self.data.pop('signals'); self.save(); self.act()
+        self.client.send_handoff.assert_not_called()
+        self.assertIn('older card',self.client.ephemeral.call_args.args[1])
+
+    def test_review_layout(self):
+        from test_review import GOOD
+        card=review.render(review.parse(json.dumps(GOOD)))
+        self.assertLess(card.index('*Suggested next step:*'),card.index('*Checks*'))
+        for label in ('Identity','Company','Fit','Potential'):
+            self.assertIn('• *'+label+':*',card)
+
+    def test_button_visibility_and_actor_validation(self):
+        from test_review import click
+        data=dict(self.data,key_for_buttons=self.event['key'])
+        ids=[a for a,k in review.action_buttons(self.cfg,data)]
+        self.assertIn('route_supply',ids); self.assertIn('route_events',ids)
+        blocked=dict(data,signals={'spam':True})
+        self.assertNotIn('route_supply',[a for a,k in review.action_buttons(self.cfg,blocked)])
+        cfg=dict(self.cfg,feedback_users={src.COLBY,'UOTHER'})
+        self.assertIsNone(review.accept_action(click('route_supply',user='UOTHER'),cfg))
+        self.assertIsNotNone(review.accept_action(click('route_supply',user=src.COLBY),cfg))
+
+    def test_route_buttons_require_matching_card(self):
+        self.ledger.delivered(self.event['key'],'sent',card_ts='999.1')
+        self.act(); self.client.send_handoff.assert_not_called()
+        self.assertIn('does not match',self.client.ephemeral.call_args.args[1])
