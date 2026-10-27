@@ -79,6 +79,13 @@ def suggested_review(review):
     return review.get('next_step') or 'Confirm the missing details before deciding.'
 
 
+def handoff_key(review, event, route):
+    identity = str(review.get('email') or review.get('company') or '').strip().casefold()
+    if identity in ('', 'not stated', 'unknown', 'n/a'):
+        identity = event['key']
+    return 'handoff:'+hashlib.sha256((route+'|'+identity).encode()).hexdigest()
+
+
 def handoff(review, event, cfg, requested_route=None):
     if not cfg.get('routing_enabled'): return None
     tier = (review.get('screening') or {}).get('tier')
@@ -91,10 +98,7 @@ def handoff(review, event, cfg, requested_route=None):
         channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
     else: return None
     # One specialist handoff per contact/route, including repeated submissions across sources.
-    identity = str(review.get('email') or review.get('company') or '').strip().casefold()
-    if identity in ('', 'not stated', 'unknown', 'n/a'):
-        identity = event['key']
-    key = 'handoff:'+hashlib.sha256((route+'|'+identity).encode()).hexdigest()
+    key = handoff_key(review, event, route)
     source = event.get('source_url')
     if not source:
         source = 'https://slack.com/archives/%s/p%s' % (event['channel'], event['ts'].replace('.', ''))
