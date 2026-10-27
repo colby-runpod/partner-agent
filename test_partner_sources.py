@@ -56,6 +56,7 @@ class Sources(unittest.TestCase):
         r=dict(route='Supply Team',screening={'tier':'Qualify'},email='TEST@example.com',company='X',dean_motion='Claimed 2 MW; unverified <@UOTHER>')
         a=src.handoff(r,e,CFG)
         self.assertEqual(a['channel'],'C0CAL8C08RK');self.assertNotIn('<@UOTHER>',a['text'])
+        self.assertTrue(a['text'].endswith('cc <@'+src.COLBY+'>'))
         b=src.handoff(dict(r,email='test@example.com'),dict(e,key='gmail:other'),CFG)
         self.assertEqual(a['key'],b['key'])
         for tier in ('DQ','Hold for Colby','Needs research','Route'):
@@ -65,6 +66,8 @@ class Sources(unittest.TestCase):
         self.assertIsNone(src.handoff(dict(r,route='Research/University'),e,CFG))
         ev=src.handoff(dict(r,route='Events/Sponsorship',screening={'tier':'Route'}),e,CFG)
         self.assertIn('<@U0AB1TSBK5X>',ev['text']);self.assertIn('<@U0APRAUGJ6P>',ev['text'])
+
+        self.assertTrue(ev['text'].endswith('cc <@'+src.COLBY+'>'))
 
     def test_uncertain_send_is_not_retried(self):
         with tempfile.TemporaryDirectory() as d:
