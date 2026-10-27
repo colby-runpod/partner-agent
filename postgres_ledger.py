@@ -14,7 +14,8 @@ class PostgresLedger:
         keep = None
         if review:
             keep = {k:r.get(k) for k in ('company','company_short','contact','first_name','email','submitted',
-                'partnership_type','route','score','decision','summary','why','next_step','headline','screening')}
+                'partnership_type','route','score','decision','summary','why','next_step','headline','screening','region','dean_motion','event_motion','signals')}
+            keep['source_event'] = dict(event)
             keep.update(checks=r.get('checks',{}), drafts=[list(d) for d in r.get('drafts',[])],
                         blocker=(r.get('signals') or {}).get('blocker',''))
         with self.store.connect() as db:

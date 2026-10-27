@@ -95,8 +95,8 @@ class FilterTests(unittest.TestCase):
 class CardTests(unittest.TestCase):
     def test_render_good_review(self):
         card = review.render(review.parse('Here you go: ' + json.dumps(GOOD) + ' done'))
-        for part in [':large_green_circle: Pursue  ·  Score 4  ·  Partnerships', '*Partner review · Example Inc*',
-                     'Pursue', 'Identity: verified - LinkedIn matches', 'Invite to apply',
+        for part in ['• *Lead score:* 4️⃣ 4/5', '*Partner review · Example Inc*',
+                     'Pursue', '*Identity:* verified - LinkedIn matches', 'Invite to apply',
                      '<https://example.com/registry|Registry>', 'Advisory only']:
             self.assertIn(part, card)
         self.assertNotIn('\u2014', card)
@@ -170,7 +170,7 @@ class ClientTests(unittest.TestCase):
                                                        {'type': 'text', 'text': json.dumps(GOOD)[40:]}]}
         self.respond(urlopen, paused, done)
         card = review.ReviewClients(CFG).review(review.accept_review(BODY, CFG))
-        self.assertIn('Score 4', card)
+        self.assertIn('4️⃣ 4/5', card)
         first, second = [json.loads(c.args[0].data) for c in urlopen.call_args_list]
         self.assertEqual(first['tools'][0]['type'], 'web_search_20250305')
         self.assertEqual(first['system'], [{'type': 'text', 'text': review.INSTRUCTIONS,
@@ -197,7 +197,7 @@ class ClientTests(unittest.TestCase):
         event = review.accept_review(BODY, CFG)
         review.ReviewClients(dict(CFG, review_mode='thread')).post(event, 'card')
         sent = api.call_args.args[2]
-        self.assertEqual((sent['channel'], sent['thread_ts'], sent['text']), ('CSUB', '50.1', 'card'))
+        self.assertEqual((sent['channel'], sent['thread_ts'], sent['text']), ('CSUB', '50.1', 'card\n\ncc <@U0BEHPEJA6L>'))
         api.reset_mock()
         api.side_effect = [{'permalink': 'https://slack.example/p50'}, {'ok': True}]
         review.ReviewClients(CFG).post(event, 'card')
@@ -522,7 +522,8 @@ class DraftTests(unittest.TestCase):
     def test_headline_and_blocker_on_card(self):
         r = self.make(headline='Probe on owned sites', signals={'blocker': 'Check 1260H exposure'})
         card = review.render(r)
-        self.assertTrue(card.startswith(':large_yellow_circle: Needs triage  ·  Score 4  ·  Partnerships  ·  Probe on owned sites'))
+        self.assertIn('🔴 Hold - resolve blocker', card)
+        self.assertIn('Probe on owned sites', card)
         self.assertIn(':octagonal_sign: *Clear first:* Check 1260H exposure', card)
 
 
@@ -918,7 +919,7 @@ class NotionWriterTests(unittest.TestCase):
     def test_post_with_buttons_sends_blocks(self, api):
         ts = review.ReviewClients(dict(ICFG, review_mode='thread')).post(review.accept_review(BODY, ICFG), 'card', [('park', 'k')])
         sent = api.call_args.args[2]
-        self.assertEqual(ts, '9.9'); self.assertEqual(sent['blocks'][-1]['type'], 'actions'); self.assertEqual(sent['text'], 'card')
+        self.assertEqual(ts, '9.9'); self.assertEqual(sent['blocks'][-1]['type'], 'actions'); self.assertEqual(sent['text'], 'card\n\ncc <@U0BEHPEJA6L>')
 
 
 class ConsistencyTests(unittest.TestCase):
