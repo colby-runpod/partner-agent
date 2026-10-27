@@ -530,7 +530,8 @@ class DraftTests(unittest.TestCase):
 class FakeSay(Fake):
     def __init__(self, *a):
         super().__init__(*a); self.said = []
-    def say(self, channel, text): self.said.append((channel, text))
+    def say(self, channel, text):
+        self.said.append((channel, text)); return '500.1'
     def permalink(self, channel, ts): return 'https://slack.example/%s/%s' % (channel, ts)
 
 
@@ -591,7 +592,7 @@ class LedgerSummaryTests(unittest.TestCase):
                                     review.dt.datetime(2026, 10, 23, 23, 30))
         self.assertIn('*Partner submissions · Fri Oct 23*', text)
         self.assertIn('1 reviewed: :large_green_circle: Pursue 1', text)
-        self.assertIn(':large_green_circle: <https://slack.example/CSUB/50.1|Example Inc>  ·  Partnerships  ·  Invite once approved', text)
+        self.assertIn(':large_green_circle: <https://slack.example/CSUB/50.1|Example Inc>  ·  4️⃣ 4/5  ·  Partnerships  ·  Invite once approved', text)
         self.assertIn('*Needs attention*', text); self.assertIn('review failed', text)
         self.assertIn('expires in 14 days', text)
         self.assertNotIn('expires', review.build_summary(dict(CFG, key_expires='2026-12-31'), [], FakeSay(),
@@ -699,14 +700,13 @@ class FeedbackTests(unittest.TestCase):
         self.assertIn('Most common miss: pursue when you wanted triage (2 times)', text)
         self.assertIn('No feedback yet', review.build_weekly(rows, [], self.client))
 
-    def test_weekly_posts_fridays_once(self):
+    def test_friday_only_posts_requested_daily_report(self):
         client = FakeFb(); ledger = review.Ledger(self.tmp.name + '/w.db')
         friday = review.dt.datetime(2026, 10, 16, 23, 30)
         review.run_summary(FCFG, ledger, client, friday)
-        self.assertEqual(len(client.said), 2); self.assertIn('*Weekly review check*', client.said[1][1])
-        ledger.put('summary_date', '')  # force another daily pass the same week
         review.run_summary(FCFG, ledger, client, friday)
-        self.assertEqual(sum('Weekly review check' in t for _, t in client.said), 1)
+        self.assertEqual(len(client.said), 1)
+        self.assertNotIn('*Weekly review check*',client.said[0][1])
 
     def test_old_ledger_gets_card_ts_column(self):
         import sqlite3

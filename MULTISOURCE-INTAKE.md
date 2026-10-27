@@ -53,3 +53,12 @@ New review cards include **Route to supply** and **Route to events** when specia
 The buttons use the standard specialist template, mention the destination owners, and cc Colby. They share the automatic handoff deduplication key (contact + destination), so clicking again or routing an already-forwarded lead does not post another copy. The card shows the delivered message link or an unconfirmed status requiring reconciliation. Uncertain sends are never automatically retried.
 
 Older cards without saved routing evidence require a fresh review. Log in Notion and Park remain available; Draft in Gmail appears only when the review includes a suitable draft and email address. That action requests a draft through the Claude/Notion pipeline; it does not send email.
+
+
+## Daily Slack review summary
+
+When SUMMARY_ENABLED=true, the same AWS agent posts to SUMMARY_CHANNEL_ID (C0C7R970C5T, team-partner-biz-dev) at or after 5 p.m. Mountain on weekdays. It runs when the review queue is idle. Coverage is explicitly Slack signup reviews and approved forwards; Claude/Gmail leads are excluded until a separate integration is implemented.
+
+The first report covers reviews since that day's Mountain midnight. Later reports start at the last confirmed reporting boundary, including late arrivals and weekends. Re-reviews of the same source message count once. Synthetic tests and email reviews are excluded. The summary includes scores, dispositions, next steps, source links and available specialist delivery receipts; it never infers delivery from a recommended route. Detailed listings are bounded at 25 reviewed items and 15 issues, with total counts retained. No automatic Friday weekly report is sent.
+
+A single PostgreSQL review_meta value, daily_summary_state, records the frozen message and reporting window before posting. Only a returned Slack timestamp advances the boundary. A crash or ambiguous send leaves pending state and blocks subsequent reports until an operator checks Slack and reconciles the saved receipt. Do not clear pending state or retry without checking whether the message was delivered.

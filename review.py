@@ -911,8 +911,8 @@ class ReviewClients:
         return api('https://slack.com/api/chat.getPermalink?' + params, os.environ['SLACK_BOT_TOKEN'])['permalink']
 
     def say(self, channel, text):
-        api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
-            {'channel': channel, 'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False})
+        return api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
+            {'channel': channel, 'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False}).get('ts')
 
     def post(self, event, text, buttons=None):
         token = os.environ['SLACK_BOT_TOKEN']
@@ -1429,64 +1429,108 @@ def build_weekly(rows, feedback, clients):
     return '\n'.join(lines)
 
 
+def summary_state(ledger):
+    return json.loads(ledger.get('daily_summary_state', '{}'))
+
+
 def summary_due(cfg, ledger, now_utc):
+    if not cfg['summary_enabled']:
+        return False
     local = mountain(now_utc)
+    state = summary_state(ledger)
     return (cfg['summary_enabled'] and local.weekday() < 5 and local.hour >= cfg['summary_hour']
-            and ledger.get('summary_date') != local.strftime('%Y-%m-%d'))
+            and not state.get('pending') and state.get('last_date') != local.strftime('%Y-%m-%d'))
 
 
-def build_summary(cfg, rows, clients, now_utc):
+def build_summary(cfg, rows, clients, now_utc, store=None):
     local = mountain(now_utc)
+    # A new review of the same source is an update, not another lead.
+    unique = {}
+    for row in sorted(rows, key=lambda r: (r['created'], r['key'])):
+        data = json.loads(row.get('data') or '{}')
+        source = data.get('source_event') or {}
+        if source.get('kind') == 'review_email' or source.get('synthetic_test'):
+            continue
+        unique[(row['channel'], row['ts'])] = row
+    rows = list(unique.values())
     ok = [r for r in rows if r['outcome'] == 'ok']
     counts = {d: sum(1 for r in ok if r['decision'] == d) for d in DECISIONS}
-    lines = ['*Partner submissions · %s*' % local.strftime('%a %b %-d')]
+    lines = ['*Partner submissions · %s*' % local.strftime('%a %b %-d'),
+             '_Coverage: AWS-reviewed Slack submissions and approved forwards. Claude/Gmail leads excluded._']
     if not rows:
         lines.append('No new submissions since the last summary.')
     else:
         lines.append('%d reviewed: %s' % (len(ok), '  ·  '.join('%s %d' % (DECISIONS[d], counts[d])
                                                              for d in DECISIONS if counts[d]) or 'none'))
         order = ['pursue', 'triage', 'redirect', 'do_not_pursue']
-        for r in sorted(ok, key=lambda r: (order.index(r['decision']) if r['decision'] in order else 9, r['created'])):
+        for r in sorted(ok, key=lambda r: (order.index(r['decision']) if r['decision'] in order else 9, r['created']))[:25]:
             label = _link(clients, r['channel'], r['ts'], r['company'] or 'submission')
-            lines.append('%s %s  ·  %s%s%s' % (DECISIONS.get(r['decision'], '').split(' ')[0], label, r['route'],
+            lines.append('%s %s  ·  %s%s%s' % (DECISIONS.get(r['decision'], '').split(' ')[0], label, partner_sources.score_badge(r)+'  ·  '+r['route'],
                                                 ('  ·  ' + r['headline']) if r['headline'] else '',
                                                 '  ·  parked' if r.get('parked_by') else
                                                 '  ·  in Notion' if r.get('notion_url') else ''))
+            data = json.loads(r.get('data') or '{}')
+            if data.get('next_step'):
+                lines.append('  Next: '+_clean(data['next_step'],180))
+            if store and data:
+                for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela')):
+                    key = partner_sources.handoff_key(data, {'key':r['key']}, destination)
+                    try:
+                        handoff = store.get(key)
+                    except TypeError:  # SQLite's absent-row result; DB errors must still abort the report.
+                        handoff = None
+                    if handoff:
+                        if handoff.get('ref') and handoff.get('result_url'):
+                            lines.append('  Handoff: <%s|Delivered to %s>' % (handoff['result_url'],owner))
+                        elif handoff['state'] == 'pending':
+                            lines.append('  Handoff to %s: queued, not yet delivered.' % owner)
+                        else:
+                            lines.append('  Handoff to %s: unconfirmed; needs reconciliation.' % owner)
+        if len(ok) > 25:
+            lines.append('Plus %d additional reviewed submissions; see the source channels.' % (len(ok)-25))
         problems = [r for r in rows if r['outcome'] != 'ok' or r['delivered'] == 'unconfirmed']
         if problems:
             lines += ['', '*Needs attention*']
-            for r in problems:
+            for r in problems[:15]:
                 what = 'review failed' if r['outcome'] != 'ok' else 'card may not have posted'
                 lines.append('• %s: %s' % (_link(clients, r['channel'], r['ts'], r['company'] or 'submission'), what))
     if cfg['key_expires']:
         days = (dt.date.fromisoformat(cfg['key_expires']) - local.date()).days
         if days <= 14:
-            lines += ['', ':key: The Anthropic API key %s. Swap ANTHROPIC_API_KEY in Railway before then.'
+            lines += ['', ':key: The Anthropic API key %s. Update the Anthropic secret in AWS before then.'
                       % ('expired %d days ago' % -days if days < 0 else 'expires in %d days' % days)]
     return '\n'.join(lines)
 
 
-def run_summary(cfg, ledger, clients, now_utc=None):
+def run_summary(cfg, ledger, clients, now_utc=None, store=None):
+    """One durable send intent per reporting window; uncertain sends require reconciliation."""
     now_utc = now_utc or dt.datetime.utcnow()
     if not summary_due(cfg, ledger, now_utc):
         return False
+    state = summary_state(ledger)
     local = mountain(now_utc)
-    start = float(ledger.get('summary_at', time.time() - 86400))
-    ledger.put('summary_date', local.strftime('%Y-%m-%d'))  # At most once a day, even if the post fails.
-    ledger.put('summary_at', time.time())
+    end = now_utc.replace(tzinfo=dt.timezone.utc).timestamp()
+    # First activation starts at today's Mountain midnight; later runs include weekends/late arrivals.
+    start = state.get('through', (now_utc - (local-local.replace(hour=0,minute=0,second=0,microsecond=0))).replace(
+        tzinfo=dt.timezone.utc).timestamp())
+    rows = [r for r in ledger.since(start) if r['created'] < end]
+    text = build_summary(cfg, rows, clients, now_utc, store=store)
+    pending = dict(date=local.strftime('%Y-%m-%d'), start=start, end=end,
+                   channel=cfg['summary_channel'], text=text, status='sending')
+    state['pending'] = pending
+    ledger.put('daily_summary_state', json.dumps(state))  # Commit intent before Slack; never retry blindly.
     try:
-        clients.say(cfg['summary_channel'], build_summary(cfg, ledger.since(start), clients, now_utc))
+        receipt = clients.say(pending['channel'], text)
+        if not receipt or not re.fullmatch(r'\d+\.\d+', receipt):
+            raise ValueError('Missing Slack receipt')
     except Exception:
-        print('Daily summary could not be posted.', flush=True)
-    week = '%d-W%02d' % local.isocalendar()[:2]
-    if local.weekday() == 4 and ledger.get('weekly_week') != week:  # Fridays, once per ISO week.
-        week_start = time.time() - 7 * 86400
-        ledger.put('weekly_week', week)
-        try:
-            clients.say(cfg['summary_channel'], build_weekly(ledger.since(week_start), ledger.feedback_since(week_start),
-                                                             clients))
-        except Exception:
-            print('Weekly review check could not be posted.', flush=True)
+        pending['status'] = 'unconfirmed'
+        ledger.put('daily_summary_state', json.dumps(state))
+        print('Daily summary delivery unconfirmed; reporting window retained for reconciliation.', flush=True)
+        return True
+    state.update(through=end, last_date=pending['date'], pending=None,
+                 receipt=dict(channel=pending['channel'], ts=receipt, start=start, end=end))
+    ledger.put('daily_summary_state', json.dumps(state))
     return True
 
 
@@ -1514,7 +1558,7 @@ def worker():
             job = store.next_job()
             if not job:
                 if cfg['review_enabled']:
-                    run_summary(cfg, ledger, review_clients)
+                    run_summary(cfg, ledger, review_clients, store=store)
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action'):
                 try:
