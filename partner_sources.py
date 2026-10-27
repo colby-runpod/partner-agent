@@ -75,13 +75,15 @@ def handoff(review, event, cfg):
     if not re.fullmatch(r'https://(?:slack\.com/archives/[A-Z0-9]+/p[0-9]+|mail\.google\.com/mail/u/[^\s<>]+)', source):
         raise ValueError('Invalid handoff source')
     motion = review.get('dean_motion') if route == 'Supply Team' else review.get('event_motion')
-    text = greeting+'\nQuick details:\n'+ '\n'.join('• %s: %s' % (label,safe(value)) for label,value in (
+    text = greeting+'\n\n'+ '\n'.join('• *%s:* %s' % (label,safe(value)) for label,value in (
         ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
-        ('Region',review.get('region')),('Motion',motion or review.get('summary'))))
-    text += '\n• Source: <%s|Original request>' % source
+        ('Region',review.get('region'))))
+    text += '\n\n*Request & qualification*\n'+safe(motion or review.get('summary'))
+    text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = re.search(r'https://app\.hubspot\.com/contacts/[0-9]+/(?:contact|record/0-1)/[0-9]+', event.get('text', ''))
-    text += ('\n• HubSpot: <%s|Contact record (source link)>' % crm.group(0) if crm else '\n• HubSpot: Not provided in the source')
+    text += ('\n• <%s|HubSpot contact>' % crm.group(0) if crm else '\n• HubSpot: Not provided in the source')
+    text += '\n\ncc <@%s>' % COLBY
     return dict(kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
 
 
