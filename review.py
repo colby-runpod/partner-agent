@@ -82,7 +82,13 @@ FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.
              '163.com', '126.com', 'naver.com', 'zoho.com', 'fastmail.com', 'hushmail.com', 'tutanota.com'}
 NOTION_VERSION = '2025-09-03'
 ACTIONS = {'log_notion': 'Log in Notion', 'draft_gmail': 'Draft in Gmail', 'park': 'Park',
-           'route_supply': 'Route to supply', 'route_events': 'Route to events'}
+           'route_supply': 'Route to supply', 'route_events': 'Route to events',
+           'route_vc': 'Route to VC/incubator'}
+ROUTING_ACTIONS = {
+    'route_supply': ('Supply Team', 'Supply handoff:'),
+    'route_events': ('Events/Sponsorship', 'Event handoff:'),
+    'route_vc': (partner_sources.VC_ROUTE, 'VC/incubator handoff:'),
+}
 GMAIL_DRAFTS = ('Probe reply', 'Pointer reply')
 UP, DOWN = {'+1', 'thumbsup'}, {'-1', 'thumbsdown'}
 CORRECTION = re.compile(r'^\s*(?:<@[A-Z0-9]+>\s*)*(?:should\s+be|correct(?:ion)?\s*:?|actually)\s+'
@@ -426,7 +432,7 @@ def accept_action(payload, cfg):
     action = (payload.get('actions') or [{}])[0]
     channel, message = (payload.get('channel') or {}).get('id'), payload.get('message') or {}
     value, action_ts = str(action.get('value', '')), str(action.get('action_ts', ''))
-    if action.get('action_id') in ('route_supply', 'route_events') and user != partner_sources.COLBY:
+    if action.get('action_id') in ROUTING_ACTIONS and user != partner_sources.COLBY:
         return None
     if action.get('action_id') not in ACTIONS or not re.fullmatch(r'T\w+:C\w+:\d+\.\d+', value):
         return None
@@ -1147,7 +1153,7 @@ def action_buttons(cfg, data, done=()):
     signals = data.get('signals')
     if cfg.get('routing_enabled') and isinstance(signals, dict) and not any(
             signals.get(k) for k in ('spam', 'blocker', 'already_in_play')):
-        for aid in ('route_supply', 'route_events'):
+        for aid in ROUTING_ACTIONS:
             if aid not in done:
                 out.append((aid, key))
     if 'park' not in done:
@@ -1278,14 +1284,14 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
         done.add('log_notion')
     if any('Gmail draft requested' in n for n in notes):
         done.add('draft_gmail')
-    for aid in ('route_supply', 'route_events'):
-        if any(n.startswith('Supply handoff:' if aid == 'route_supply' else 'Event handoff:') for n in notes):
+    for aid in ROUTING_ACTIONS:
+        if any(n.startswith(ROUTING_ACTIONS[aid][1]) for n in notes):
             done.add(aid)
     if row.get('parked_by'):
         clients.ephemeral(event, 'This one is already parked.')
         return
     try:
-        if event['action'] in ('route_supply', 'route_events'):
+        if event['action'] in ROUTING_ACTIONS:
             if user != partner_sources.COLBY:
                 clients.ephemeral(event, 'Only Colby can route a lead.')
                 return
@@ -1299,7 +1305,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
             if not isinstance(data.get('signals'), dict) or not data.get('source_event'):
                 clients.ephemeral(event, 'This older card lacks saved routing details. Request a fresh review first.')
                 return
-            target = 'Supply Team' if event['action'] == 'route_supply' else 'Events/Sponsorship'
+            target = ROUTING_ACTIONS[event['action']][0]
             route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
             if route_job is None:
                 clients.ephemeral(event, 'This lead is flagged as spam, blocked or already in play. Resolve that before routing.')
@@ -1313,7 +1319,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 status = 'Delivered to '+target+' · <'+existing['result_url']+'|Open handoff>'
             else:
                 status = 'Delivery unconfirmed for '+target+'; held for reconciliation. Do not resend.'
-            prefix = 'Supply handoff:' if event['action'] == 'route_supply' else 'Event handoff:'
+            prefix = ROUTING_ACTIONS[event['action']][1]
             notes = [n for n in notes if not n.startswith(prefix)]
             notes.append(prefix+' '+status+' · requested by <@'+user+'>')
             done.add(event['action'])
@@ -1473,7 +1479,8 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
             if data.get('next_step'):
                 lines.append('  Next: '+_clean(data['next_step'],180))
             if store and data:
-                for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela')):
+                for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela'),
+                                           (partner_sources.VC_ROUTE,'Cameron')):
                     key = partner_sources.handoff_key(data, {'key':r['key']}, destination)
                     try:
                         handoff = store.get(key)

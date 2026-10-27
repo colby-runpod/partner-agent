@@ -185,3 +185,41 @@ class RoutingActions(unittest.TestCase):
         self.ledger.delivered(self.event['key'],'sent',card_ts='999.1')
         self.act(); self.client.send_handoff.assert_not_called()
         self.assertIn('does not match',self.client.ephemeral.call_args.args[1])
+
+
+class VCRouting(RoutingActions):
+    def test_vc_automatic_and_manual_share_delivery_and_format(self):
+        self.data.update(route='Partnerships',partnership_type='VC/PE/Incubator',
+                         screening={'tier':'Route'},summary='Portfolio enablement request',
+                         event_motion='Do not use this event description')
+        self.save()
+        job=src.handoff(self.data,self.event,self.cfg)
+        self.assertEqual(job['channel'],'C0CCQ9311D2')
+        self.assertIn('<@U0B9ZRF3JUX>',job['text'])
+        self.assertIn('Portfolio enablement request',job['text'])
+        self.assertNotIn('Do not use this event description',job['text'])
+        self.assertIn('• *Region:* US\n• *Lead score:*',job['text'])
+        self.assertTrue(job['text'].endswith('cc <@'+src.COLBY+'>'))
+        self.store.enqueue(job);src.process_handoff(self.store,self.store.get(job['key']),self.client)
+        self.act('route_vc');self.act('route_vc',ts='301.2')
+        self.client.send_handoff.assert_called_once()
+        self.assertIn('VC/incubator handoff: Delivered',self.ledger.review(self.event['key'])['notes'])
+
+    def test_vc_gates_and_unrelated_partnerships(self):
+        data=dict(self.data,route='Partnerships',partnership_type='VC/PE/Incubator',screening={'tier':'Qualify'})
+        self.assertIsNotNone(src.handoff(data,self.event,self.cfg))
+        self.assertIsNone(src.handoff(dict(data,partnership_type='Reseller/VAR'),self.event,self.cfg))
+        self.assertIsNone(src.handoff(dict(data,screening={'tier':'Hold for Colby'}),self.event,self.cfg))
+        for signal in ('spam','blocker','already_in_play'):
+            self.assertIsNone(src.handoff(dict(data,signals={signal:True}),self.event,self.cfg,requested_route=src.VC_ROUTE))
+        self.assertIsNone(src.handoff(data,self.event,dict(self.cfg,routing_enabled=False)))
+
+    def test_vc_action_requires_colby_and_holds_uncertain_delivery(self):
+        self.act('route_vc',user='UOTHER');self.client.send_handoff.assert_not_called()
+        self.client.send_handoff.side_effect=TimeoutError()
+        self.act('route_vc');self.act('route_vc',ts='301.2')
+        self.client.send_handoff.assert_called_once()
+        self.assertIn('VC/incubator handoff: Delivery unconfirmed',self.ledger.review(self.event['key'])['notes'])
+        from test_review import click
+        self.assertIsNone(review.accept_action(click('route_vc',user='UOTHER'),self.cfg))
+        self.assertIsNotNone(review.accept_action(click('route_vc',user=src.COLBY),self.cfg))

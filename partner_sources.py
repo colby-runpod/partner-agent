@@ -9,6 +9,9 @@ from intake import flatten
 COLBY = 'U0BEHPEJA6L'
 FORWARD_CHANNEL = 'C0C7HG8KYFL'
 REACTION = 'eyes'
+VC_ROUTE = 'VC/Incubator'
+VC_CHANNEL = 'C0CCQ9311D2'
+CAMERON = 'U0B9ZRF3JUX'
 
 
 def accept_forward(body, cfg):
@@ -76,6 +79,8 @@ def suggested_review(review):
         return 'Confirm available GPUs, site readiness and capacity before discussing fit.'
     if route == 'Events/Sponsorship':
         return 'Confirm the sponsorship ask, audience and decision deadline.'
+    if route == VC_ROUTE:
+        return 'Confirm portfolio fit, the requested support and a concrete next step with the fund or program.'
     return review.get('next_step') or 'Confirm the missing details before deciding.'
 
 
@@ -90,12 +95,16 @@ def handoff(review, event, cfg, requested_route=None):
     if not cfg.get('routing_enabled'): return None
     tier = (review.get('screening') or {}).get('tier')
     route = requested_route or review.get('route')
+    if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
+        route = VC_ROUTE
     signals = review.get('signals') or {}
     if signals.get('blocker') or signals.get('already_in_play') or signals.get('spam'): return None
     if route == 'Supply Team' and (requested_route or tier in ('Act now', 'Qualify')):
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
     elif route == 'Events/Sponsorship' and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
         channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
+    elif route == VC_ROUTE and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
+        channel, greeting = VC_CHANNEL, 'Hey <@'+CAMERON+'>-passing along a VC/incubator request.'
     else: return None
     # One specialist handoff per contact/route, including repeated submissions across sources.
     key = handoff_key(review, event, route)
@@ -104,7 +113,8 @@ def handoff(review, event, cfg, requested_route=None):
         source = 'https://slack.com/archives/%s/p%s' % (event['channel'], event['ts'].replace('.', ''))
     if not re.fullmatch(r'https://(?:slack\.com/archives/[A-Z0-9]+/p[0-9]+|mail\.google\.com/mail/u/[^\s<>]+)', source):
         raise ValueError('Invalid handoff source')
-    motion = review.get('dean_motion') if route == 'Supply Team' else review.get('event_motion')
+    motion = (review.get('dean_motion') if route == 'Supply Team' else
+              review.get('event_motion') if route == 'Events/Sponsorship' else review.get('summary'))
     text = greeting+'\n\n'+ '\n'.join('• *%s:* %s' % (label,safe(value)) for label,value in (
         ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
         ('Region',review.get('region')), ('Lead score',score_badge(review)),
