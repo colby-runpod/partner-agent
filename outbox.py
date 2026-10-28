@@ -203,6 +203,18 @@ class Outbox:
         if self.storage is not None: return self.storage.finish_event(key)
         with self.db() as db:
             db.execute('UPDATE outbox_events SET done=1 WHERE key=?',(key,))
+    def save_event(self,event):
+        if self.storage is not None: return self.storage.save_event(event)
+        with self.db() as db:
+            db.execute('UPDATE outbox_events SET payload=? WHERE key=?',(json.dumps(event),event['key']))
+    def bind_weekly_draft(self,id,draft_id):
+        if self.storage is not None: return self.storage.bind_weekly_draft(id,draft_id)
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            r=json.loads(db.execute('SELECT snapshot FROM outbox_delivery WHERE id=?',(id,)).fetchone()[0])
+            if r.get('weekly_draft_id',draft_id)!=draft_id: raise ValueError('Weekly draft already bound')
+            r['weekly_draft_id']=draft_id
+            db.execute('UPDATE outbox_delivery SET snapshot=? WHERE id=?',(json.dumps(r),id))
     def claim_send(self,r):
         if self.storage is not None: return self.storage.claim_send(r,now())
         with self.db() as db:
@@ -310,6 +322,9 @@ class Outbox:
         if not self.eligible(fresh): return
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
         if r['channel']==WEEKLY_CHANNEL and row(fresh)!=r: return  # Revalidate edited weekly content on the next poll.
+        if r['channel']==WEEKLY_CHANNEL and os.environ.get('WEEKLY_FEEDBACK_ENABLED')=='true':
+            import weekly_feedback
+            r['weekly_draft_id']=weekly_feedback.resolve_draft(self.remote,r)
         if not self.claim_send(r): return
         for attempt in range(2):
             try:
@@ -333,6 +348,9 @@ class Outbox:
         # Poll owns retry and keeps decisions durable even during a remote outage.
     def event(self,e):
         self.verify()
+        if e['kind']=='weekly_feedback':
+            import weekly_feedback
+            return weekly_feedback.process(self,e)
         matches=self.matches(e['message_ts'])
         d=next((x for x in matches if json.loads(x['snapshot'])['channel']==e['channel']),None)
         if not d or d['decision']: return
@@ -368,6 +386,10 @@ def owns(channel,ts):
 
 def accept(body,cfg):
     if not cfg.get('outbox_enabled') or body.get('team_id')!=cfg['team_id'] or body.get('api_app_id')!=cfg['app_id']: return
+    import weekly_feedback
+    weekly=weekly_feedback.accept(body)
+    if weekly:
+        return weekly if owns(weekly['channel'],weekly['message_ts']) else None
     e=body.get('event',{}); item=e.get('item',{})
     if not body.get('event_id') or not e.get('user') or e.get('bot_id') or e.get('user')==BOT: return
     if e.get('type')=='reaction_added' and item.get('type')=='message' and e.get('reaction') in ('white_check_mark','eyes','x'):

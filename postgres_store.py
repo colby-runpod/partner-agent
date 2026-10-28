@@ -128,6 +128,21 @@ class PostgresStore:
         with self.connect() as db:
             db.execute('UPDATE partner_agent.outbox_events SET done=TRUE WHERE namespace=%s AND key=%s',(self.namespace,key))
 
+    def save_event(self, event):
+        with self.connect() as db:
+            db.execute('UPDATE partner_agent.outbox_events SET payload=%s WHERE namespace=%s AND key=%s',
+                       (json.dumps(event),self.namespace,event['key']))
+
+    def bind_weekly_draft(self, row_id, draft_id):
+        with self.connect() as db:
+            row=db.execute('SELECT snapshot FROM partner_agent.outbox_delivery WHERE namespace=%s AND id=%s FOR UPDATE',
+                           (self.namespace,row_id)).fetchone()
+            snapshot=json.loads(row['snapshot'])
+            if snapshot.get('weekly_draft_id',draft_id)!=draft_id: raise ValueError('Weekly draft already bound')
+            snapshot['weekly_draft_id']=draft_id
+            db.execute('UPDATE partner_agent.outbox_delivery SET snapshot=%s WHERE namespace=%s AND id=%s',
+                       (json.dumps(snapshot),self.namespace,row_id))
+
     def next_job(self):
         # Selection only. Worker ownership is required before using this in production.
         with self.connect() as db:

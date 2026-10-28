@@ -87,6 +87,29 @@ class StorageTests(unittest.TestCase):
     def test_duplicate_events(self):
         self.assertEqual(sum(self.parallel(lambda:self.store.enqueue_event({'key':'event'}))),1)
 
+    def test_weekly_feedback_progress_survives_postgres_restart(self):
+        from unittest.mock import patch
+        from outbox import Outbox
+        from test_weekly_outbox import weekly
+        from test_weekly_feedback import FeedbackRemote, DRAFT
+        import weekly_feedback as w
+        p=weekly(); remote=FeedbackRemote([p])
+        with patch.dict(os.environ, SLACK_TEAM_ID='T1', WEEKLY_OUTBOX_ENABLED='true', WEEKLY_FEEDBACK_ENABLED='true'):
+            box=Outbox(None, remote, storage=self.store); box.post(p)
+            event={'kind':'weekly_feedback','key':'weekly-fixture','event_id':'weekly-fixture',
+                   'channel':w.o.WEEKLY_CHANNEL,'message_ts':box.get(p['id'])['ts'],
+                   'ts':'1793133459.4','user':w.o.COLBY,'text':'<@'+w.o.BOT+'> Test update','progress':{}}
+            box.enqueue_event(event); remote.fail_destination=DRAFT; remote.accept_timeout=True
+            box.poll()
+            self.assertEqual(json.loads(self.store.pending_events()[0]['payload'])['progress']['draft'],'writing')
+            other=PostgresStore(self.connection, 'test:other-weekly')
+            other.enqueue_event(dict(event, text='Other namespace'))
+            remote.fail_destination=None
+            Outbox(None, remote, storage=PostgresStore(self.connection,self.store.namespace)).poll()
+            self.assertEqual(self.store.pending_events(),[])
+            self.assertEqual(json.loads(other.pending_events()[0]['payload'])['text'],'Other namespace')
+            self.assertEqual(remote.append_count[DRAFT],1)
+
     def test_outbox_restart_finishes_writeback_without_repost(self):
         from unittest.mock import patch
         from outbox import Outbox, prop
