@@ -1567,7 +1567,7 @@ def worker():
                 if cfg['review_enabled']:
                     run_summary(cfg, ledger, review_clients, store=store)
                 time.sleep(0.5)
-            elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action'):
+            elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action', 'weekly_feedback'):
                 try:
                     if not delivery:
                         raise RuntimeError('Outbox processing is disabled')
