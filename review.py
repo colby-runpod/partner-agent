@@ -57,8 +57,8 @@ from intake import Application, Store, api, flatten, verify
 
 DIGEST_MARKERS = ('PARTNERSHIP MQL DIGEST', 'Incoming Partnership Request')
 ROUTES = ('Partnerships', 'Supply Team', 'Sales', 'Events/Sponsorship', 'Influencer/Creator',
-          'Research/University', 'Startup Program', 'Product/Eng', 'Review Needed')
-SELF_SERVE = ('Startup Program', 'Influencer/Creator')
+          'Research/University', 'Startup Program', 'Affiliate Program', 'Product/Eng', 'Review Needed')
+SELF_SERVE = ('Startup Program', 'Influencer/Creator', 'Affiliate Program')
 TYPES = ('Data Center / Infrastructure', 'Reseller/VAR', 'Technology/Integration', 'AI / Model',
          'Credits / Program', 'Co-marketing', 'VC/PE/Incubator', 'Misrouted / Other', 'Referral',
          'SI', 'Consultancy/Advisory', 'MSP', 'Community / Education')
@@ -138,8 +138,8 @@ Routes:
 - Supply Team: datacenter capacity, colocation, powered shell, GPU supply to Runpod.
 - Sales: a customer purchase, renewal, or commercial or compliance question only Sales can answer.
 - Events/Sponsorship: money, credits, swag, a booth or a speaker for an event with a date and audience.
-- Influencer/Creator: paid content on one person's channel, affiliate content, directory or listing
-  sites. Self-serve via the referral and affiliate program, which pays on referred usage.
+- Affiliate Program: explicit affiliate enrollment, tracked referral links or commission-on-referred-usage inquiries. Log to the affiliate team channel for human follow-up; no automatic applicant email. Do not use this route for named-customer referral partnerships, paid sponsorship, or technology integration.
+- Influencer/Creator: paid content, creator sponsorship, directory or listing proposals without explicit affiliate-program intent. Do not assume all creators want the affiliate program.
 - Research/University: an institution, lab or researcher asking for compute for research, teaching or
   a cohort with a real workload. A university buying capacity is Sales.
 - Startup Program: startup credits or accelerator asks. Self-serve.
@@ -623,6 +623,8 @@ DEAN = ("Hey Dean -- passing along a supply-side infra lead.\nQuick details:\n\n
 
 def drafts(review, email, submitted):
     """Copy-ready text for the card. Returns a list of (label, text)."""
+    if review['route'] == 'Affiliate Program':
+        return []  # Affiliate owner backlog replaces applicant email drafting.
     fill = {'first': review['first_name'], 'company': review['company_short']}
     route, decision, v = review['route'], review['decision'], {n: c[0] for n, c in review['checks'].items()}
     if review.get('screening'):
@@ -694,7 +696,7 @@ def render(review, history=None, draft_list=()):
         step = review['next_step']
     if review.get('screening'):
         step = partner_sources.suggested_review(review)
-    if review['signals']['blocker'] or review['route'] in ('Supply Team', 'Events/Sponsorship'):
+    if review['signals']['blocker'] or review['route'] in ('Supply Team', 'Events/Sponsorship', 'Research/University', 'Affiliate Program'):
         step = partner_sources.suggested_review(review)
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
@@ -1480,7 +1482,8 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
                 lines.append('  Next: '+_clean(data['next_step'],180))
             if store and data:
                 for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela'),
-                                           (partner_sources.VC_ROUTE,'Cameron')):
+                                           (partner_sources.VC_ROUTE,'Cameron'),('Research/University','research/education backlog'),
+                                           ('Affiliate Program','affiliate backlog')):
                     key = partner_sources.handoff_key(data, {'key':r['key']}, destination)
                     try:
                         handoff = store.get(key)

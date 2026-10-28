@@ -235,3 +235,18 @@ class ResearchChannelLog(unittest.TestCase):
         self.assertEqual(a['key'],src.handoff(r,dict(e,key='repeated'),CFG)['key'])
         self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
         self.assertIsNone(src.handoff(r,e,dict(CFG,routing_enabled=False)))
+
+class AffiliateChannelLog(unittest.TestCase):
+    def test_explicit_affiliate_low_score_and_distinct_referral(self):
+        e=dict(key='affiliate',channel='C123',ts='100.1')
+        r=dict(route='Affiliate Program',screening={'tier':'Route'},score=1,decision='redirect',email='creator@example.com')
+        a=src.handoff(r,e,CFG)
+        self.assertEqual(a['channel'],src.AFFILIATE_CHANNEL)
+        self.assertEqual(review.drafts(r,None,None),[])
+        self.assertEqual(a['text'].count('<@'),1)
+        self.assertTrue(a['text'].endswith('cc <@'+src.COLBY+'>'))
+        self.assertEqual(a['key'],src.handoff(r,dict(e,key='repeated'),CFG)['key'])
+        for route in ('Influencer/Creator','Partnerships'):
+            self.assertIsNone(src.handoff(dict(r,route=route,partnership_type='Referral'),e,CFG))
+        self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
+        self.assertIsNone(src.handoff(r,e,dict(CFG,routing_enabled=False)))

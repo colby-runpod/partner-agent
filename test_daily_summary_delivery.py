@@ -70,6 +70,6 @@ class DailySummaryDelivery(unittest.TestCase):
         self.ledger.record('k',dict(channel='C1',ts='100.1',thread_ts='100.1'),data,'ok',now=1)
         store=Mock();store.get.side_effect=[{'state':'done','ref':'1.2','result_url':'https://slack.com/archives/C1/p12'},
                                            {'state':'done','ref':None,'result_url':None},
-                                           {'state':'done','ref':'3.4','result_url':'https://slack.com/archives/CVC/p34'}]
+                                           {'state':'done','ref':'3.4','result_url':'https://slack.com/archives/CVC/p34'},None,None]
         text=review.build_summary(CFG,self.ledger.since(0),self.client,self.now,store)
         self.assertIn('Delivered to Cameron',text);self.assertIn('Delivered to Dean',text);self.assertIn('Adriana and Carmela: unconfirmed',text)
