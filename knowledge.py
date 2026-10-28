@@ -128,7 +128,10 @@ class Clients:
             'anthropic-version':'2023-06-01','Content-Type':'application/json'})
         with urllib.request.urlopen(request, timeout=60) as response: data=json.load(response)
         if data.get('stop_reason') != 'end_turn': raise ValueError('Incomplete answer')
-        return json.loads(''.join(c.get('text','') for c in data.get('content',[]) if c.get('type')=='text'))
+        text = ''.join(c.get('text','') for c in data.get('content',[]) if c.get('type')=='text').strip()
+        fenced = re.fullmatch(r'```(?:json)?\s*\n(.*?)\n```', text, re.S)
+        if fenced: text = fenced[1].strip()
+        return json.loads(text)
 
     def reply(self, event, text):
         return api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],

@@ -109,5 +109,9 @@ class KnowledgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):knowledge.Clients().answer('Who?',SOURCES)
         payload=json.loads(urlopen.call_args.args[0].data)
         self.assertNotIn('tools',payload);self.assertEqual(payload['system'],knowledge.SYSTEM)
+        expected={'paragraphs':[{'text':'Owner is Colby.','sources':[1]}]}
+        for text in (json.dumps(expected), '```json\n'+json.dumps(expected)+'\n```'):
+            urlopen.return_value.__enter__.return_value=io.BytesIO(json.dumps({'stop_reason':'end_turn','content':[{'type':'text','text':text}]}).encode())
+            self.assertEqual(knowledge.Clients().answer('Who?',SOURCES), expected)
 
 if __name__=='__main__':unittest.main()
