@@ -17,7 +17,11 @@ Keep Route, Program readiness, Opportunity score (1-5), Evidence confidence, Dis
 
 Research identity, product/delivery readiness, actual demand/distribution, existing relationship and likely value before deciding. Attribute claims, cite evidence, state unknowns and unavailable tools. Warm internal forwards do not raise scores. Only ask applicants questions that cannot reasonably be researched and materially change a worthwhile decision.
 
-## Affiliate email workflow
+## Affiliate channel backlog (supersedes email activation)
+
+Colby chose a Slack handoff queue instead of automated applicant emails. Explicit affiliate inquiries go to C0CD3M1QG4U with the shared readable template, source links and Colby cc; no owner mention until the hire starts. No minimum score. Existing spam, blocker and already-in-play safeguards and shared delivery receipts apply. Referral partnerships and paid creator sponsorship are distinct. No historical replay or applicant email is enabled.
+
+## Deferred affiliate email workflow
 
 Sender: partners@runpod.io. Gmail signature selection: partners@ (confirmed by Colby).
 
