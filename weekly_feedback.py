@@ -171,9 +171,10 @@ def process(box, event):
         append_capture(box, event, 'draft', event['draft_id'], event['content'])
         event['error'] = ''
         box.save_event(event)
-        acknowledge(box, event, 'Captured your feedback in the outbox record and this week’s draft staging notes: '
-                    'https://www.notion.so/' + event['draft_id'].replace('-', '') +
-                    '\nIt is pending incorporation into the draft; nothing was republished.')
+        acknowledge(box, event, 'Captured your feedback in the outbox record and this week’s draft staging notes.\n'
+                    '<https://app.notion.com/p/' + event['draft_id'].replace('-', '') +
+                    '|View weekly draft in Notion>\n'
+                    'It is pending incorporation into the draft; nothing was republished.')
     except Exception as exc:
         # Do not persist provider response bodies or credentials in diagnostics.
         event['error'] = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__
