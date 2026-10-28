@@ -63,7 +63,7 @@ class Sources(unittest.TestCase):
             self.assertIsNone(src.handoff(dict(r,screening={'tier':tier}),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'blocker':'risk'}),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'already_in_play':True}),e,CFG))
-        self.assertIsNone(src.handoff(dict(r,route='Research/University'),e,CFG))
+        self.assertEqual(src.handoff(dict(r,route='Research/University'),e,CFG)['channel'],src.RESEARCH_CHANNEL)
         ev=src.handoff(dict(r,route='Events/Sponsorship',screening={'tier':'Route'}),e,CFG)
         self.assertIn('<@U0AB1TSBK5X>',ev['text']);self.assertIn('<@U0APRAUGJ6P>',ev['text'])
 
@@ -223,3 +223,15 @@ class VCRouting(RoutingActions):
         from test_review import click
         self.assertIsNone(review.accept_action(click('route_vc',user='UOTHER'),self.cfg))
         self.assertIsNotNone(review.accept_action(click('route_vc',user=src.COLBY),self.cfg))
+
+class ResearchChannelLog(unittest.TestCase):
+    def test_low_score_log_without_owner_mention_and_shared_receipt(self):
+        e=dict(key='research',channel='C123',ts='100.1')
+        r=dict(route='Research/University',screening={'tier':'Needs research'},score=2,decision='triage',email='lab@example.com')
+        a=src.handoff(r,e,CFG)
+        self.assertEqual(a['channel'],src.RESEARCH_CHANNEL)
+        self.assertEqual(a['text'].count('<@'),1)
+        self.assertTrue(a['text'].endswith('cc <@'+src.COLBY+'>'))
+        self.assertEqual(a['key'],src.handoff(r,dict(e,key='repeated'),CFG)['key'])
+        self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
+        self.assertIsNone(src.handoff(r,e,dict(CFG,routing_enabled=False)))

@@ -12,6 +12,7 @@ REACTION = 'eyes'
 VC_ROUTE = 'VC/Incubator'
 VC_CHANNEL = 'C0CCQ9311D2'
 CAMERON = 'U0B9ZRF3JUX'
+RESEARCH_CHANNEL = 'C0CCBS9NU2V'
 
 
 def accept_forward(body, cfg):
@@ -79,6 +80,8 @@ def suggested_review(review):
         return 'Confirm available GPUs, site readiness and capacity before discussing fit.'
     if route == 'Events/Sponsorship':
         return 'Confirm the sponsorship ask, audience and decision deadline.'
+    if route == 'Research/University':
+        return 'Review the institution, research or teaching use case, requested compute and timing.'
     if route == VC_ROUTE:
         return 'Confirm portfolio fit, the requested support and a concrete next step with the fund or program.'
     return review.get('next_step') or 'Confirm the missing details before deciding.'
@@ -105,6 +108,8 @@ def handoff(review, event, cfg, requested_route=None):
         channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
     elif route == VC_ROUTE and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
         channel, greeting = VC_CHANNEL, 'Hey <@'+CAMERON+'>-passing along a VC/incubator request.'
+    elif route == 'Research/University':
+        channel, greeting = RESEARCH_CHANNEL, 'Research/education lead logged for Zoe’s review when she starts.'
     else: return None
     # One specialist handoff per contact/route, including repeated submissions across sources.
     key = handoff_key(review, event, route)
