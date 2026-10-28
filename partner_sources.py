@@ -1,4 +1,5 @@
 """Explicit Colby-approved Slack intake and durable specialist handoffs."""
+import knowledge
 import hashlib
 import html
 import json
@@ -46,8 +47,13 @@ def process_forward(store, job, clients, cfg):
     # Attachment contents cannot authorize intake; the actual message must mention our bot.
     approved = (msg.get('user') == COLBY and '<@'+cfg['bot_user']+'>' in msg.get('text', '')
                 and any(r.get('name') == REACTION and COLBY in r.get('users', []) for r in msg.get('reactions', [])))
-    if approved:
-        key = ':'.join((cfg['team_id'], event['channel'], event['ts']))
+    key = ':'.join((cfg['team_id'], event['channel'], event['ts']))
+    inquiry = knowledge.question(msg, cfg['bot_user']) if cfg.get('knowledge_enabled') else None
+    # Share the review key: a later eyes reaction cannot change an answered question into a lead.
+    if inquiry and not approved and msg.get('user') == COLBY and not msg.get('bot_id'):
+        store.enqueue(dict(event, kind='knowledge', key=key, event_id='knowledge:'+key,
+                           user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], question=inquiry))
+    elif approved:
         store.enqueue(dict(event, kind='review_forward', key=key, event_id='forward:'+key,
                            user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], text=flatten(msg)[:20000], source_type='slack_forward'))
     store.update(job['key'], state='done')

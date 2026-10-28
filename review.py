@@ -32,6 +32,7 @@ that already exists; Draft in Gmail asks the scheduled pipeline, through Next
 Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
 aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
+import knowledge
 import partner_sources
 import gmail_intake
 import datetime as dt
@@ -265,6 +266,7 @@ def config():
         for name in ('SLACK_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL'):
             if not os.environ.get(name):
                 raise ValueError('Missing environment setting: ' + name)
+    knowledge.configure(cfg)
     tasks.config(cfg)
     assistant.config(cfg)
     cfg['enabled'] = cfg['chat_enabled'] or cfg['review_enabled']
@@ -1586,6 +1588,8 @@ def worker():
                 except Exception:
                     store.update(job['key'], state='done', error='forward_approval_check_failed')
                     print('Forward approval check unavailable; reapply approval after fixing Slack access.', flush=True)
+            elif json.loads(job['payload']).get('kind') == 'knowledge':
+                knowledge.process(store, job, knowledge.Clients())
             elif json.loads(job['payload']).get('kind') == 'specialist_handoff':
                 partner_sources.process_handoff(store, job, review_clients)
             elif json.loads(job['payload']).get('kind') in ('review', 'review_manual', 'review_forward', 'review_email'):
