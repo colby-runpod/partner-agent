@@ -97,14 +97,15 @@ def handoff_key(review, event, route):
     return 'handoff:'+hashlib.sha256((route+'|'+identity).encode()).hexdigest()
 
 
-def handoff(review, event, cfg, requested_route=None):
+def handoff(review, event, cfg, requested_route=None, requested_by=None):
     if not cfg.get('routing_enabled'): return None
     tier = (review.get('screening') or {}).get('tier')
     route = requested_route or review.get('route')
     if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
         route = VC_ROUTE
     signals = review.get('signals') or {}
-    if signals.get('blocker') or signals.get('already_in_play') or signals.get('spam'): return None
+    explicit = requested_by == COLBY and bool(requested_route)
+    if signals.get('spam') or (not explicit and (signals.get('blocker') or signals.get('already_in_play'))): return None
     if route == 'Supply Team' and (requested_route or tier in ('Act now', 'Qualify')):
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
     elif route == 'Events/Sponsorship' and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
@@ -131,6 +132,11 @@ def handoff(review, event, cfg, requested_route=None):
         ('Assessment',assessment(review))))
     text += '\n\n*Request & qualification*\n'+safe(motion or review.get('summary'))
     text += '\n\n*Suggested review:* '+safe(suggested_review(dict(review, route=route)))
+    if explicit:
+        text += '\n\n*Requested handoff:* Colby requested specialist validation despite the original assessment. This is not approval or qualification.'
+        warnings = [str(signals['blocker'])] if signals.get('blocker') else []
+        if signals.get('already_in_play'): warnings.append('An existing relationship or owner may already be involved; coordinate before outreach.')
+        text += '\n*Original warnings:* '+safe('; '.join(warnings) or 'No blocker flagged; original qualification remains unchanged.')
     text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = re.search(r'https://app\.hubspot\.com/contacts/[0-9]+/(?:contact|record/0-1)/[0-9]+', event.get('text', ''))
