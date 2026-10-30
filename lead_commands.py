@@ -142,6 +142,8 @@ def process(store,job,clients,ledger,cfg,notion):
                     already=bool(delivered.get('result_url'))
                     if delivered['state']=='pending':
                         routes.process_handoff(store,delivered,clients);delivered=store.get(handoff['key'])
+                    import lead_completion
+                    lead_completion.enqueue_handoff(store,handoff,data['source_event'],target)
                     result=delivered.get('result_url') if delivered.get('ref') else None
                     receipt.update(delivery_url=result or '',delivery_state='delivered' if result else 'unconfirmed')
                     store.update(key,ref=json.dumps(receipt),result_url=result or '')

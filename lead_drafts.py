@@ -77,13 +77,14 @@ def generate(event,sources,previous,clients):
     if re.search(r'(?:weekdays?|weekends?).{0,45}(?:work for (?:us|me)|both work|available)|(?:we|i)(?: are| am| can|\x27re).{0,35}(?:available|meet|call).{0,30}(?:weekends?|weekdays?)',body,re.I):
         raise ValueError('Unverified scheduling availability')
     body=re.sub(r'\n(?:Thanks(?: again)?|Best(?: regards)?|Regards|Sincerely|Cheers),?\s*\nColby(?: Henderson)?\s*$','',body,flags=re.I).rstrip()
+    body=re.sub(r'\nColby(?: Henderson)?\s*$','',body,flags=re.I).rstrip()
     def clean(s):return re.sub(r'runpod','Runpod',s,flags=re.I).replace(' — ','-').replace('—','-').replace(' - ','-').strip()
     return dict(to=email,subject=clean(subject),body=clean(body))
 
 
 def render(draft):
-    return ('*Email draft - not sent*\n*To:* '+html.escape(draft['to'])+'\n*From for Gmail:* partners@runpod.io\n*Subject:* '+html.escape(draft['subject'])+
-        '\n\n'+html.escape(draft['body'])+'\n\n_Signature: the partners@ Gmail signature will be added by the Gmail workflow._'+
+    return ('*Email draft - not sent*\n*To:* '+html.escape(draft['to'],quote=False)+'\n*From for Gmail:* partners@runpod.io\n*Subject:* '+html.escape(draft['subject'],quote=False)+
+        '\n\n'+html.escape(draft['body'],quote=False)+'\n\n_Signature: the partners@ Gmail signature will be added by the Gmail workflow._'+
         '\nMention me with revisions, or say “save this draft to Gmail” to request creation through the existing pipeline. Nothing has been created in Gmail or sent.')
 
 

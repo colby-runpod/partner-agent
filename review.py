@@ -34,6 +34,7 @@ aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
 import hubspot_links
 import question_progress
+import lead_completion
 import lead_drafts
 import lead_qa
 import lead_commands
@@ -363,7 +364,7 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = lead_drafts.accept(body, cfg) or lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or lead_qa.accept(body, cfg) or tasks.accept_task(body, cfg) or \
+    event = lead_completion.accept(body, cfg) or lead_drafts.accept(body, cfg) or lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or lead_qa.accept(body, cfg) or tasks.accept_task(body, cfg) or \
         assistant.accept_agent(body, cfg)
     if event:
         return event
@@ -1045,6 +1046,7 @@ def process(store, job, clients, ledger=None, cfg=None):
             route_job = partner_sources.handoff(getattr(clients, 'last', None) or {}, event, cfg or {})
             if route_job:
                 store.enqueue(route_job)
+                lead_completion.enqueue_handoff(store,route_job,event,route_job.get('completion_route') or (getattr(clients,'last',{}) or {}).get('route'))
         except StorageUnavailable:
             raise
         except NotDigest:
@@ -1341,6 +1343,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 partner_sources.process_handoff(store, existing, clients)
                 existing = store.get(route_job['key'])
             if existing.get('ref') and existing.get('result_url'):
+                lead_completion.enqueue_handoff(store,route_job,data['source_event'],target)
                 status = 'Delivered to '+target+' · <'+existing['result_url']+'|Open handoff>'
             else:
                 status = 'Delivery unconfirmed for '+target+'; held for reconciliation. Do not resend.'
@@ -1609,6 +1612,8 @@ def worker():
                 except Exception:
                     store.update(job['key'], state='done', error='forward_approval_check_failed')
                     print('Forward approval check unavailable; reapply approval after fixing Slack access.', flush=True)
+            elif json.loads(job['payload']).get('kind') == 'lead_completion':
+                lead_completion.process(store, job, review_clients, ledger, cfg, notion)
             elif json.loads(job['payload']).get('kind') == 'lead_draft':
                 lead_drafts.process(store, job, review_clients, ledger, cfg, notion)
             elif json.loads(job['payload']).get('kind') == 'lead_qa':

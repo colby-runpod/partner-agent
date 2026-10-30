@@ -65,3 +65,8 @@ class Drafts(unittest.TestCase):
     def test_prospect_availability_is_not_runpod_availability(self):
         c=Mock();c._call.return_value=dict(stop_reason='end_turn',content=[dict(type='text',text=json.dumps(dict(subject='Hello',body='Weekdays or weekends both work for us.')))])
         with self.assertRaises(ValueError):d.generate(self.event(),[{},dict(text={'email':'real@example.test'})],None,c)
+
+    def test_slack_draft_preserves_apostrophes_and_escapes_mentions(self):
+        text=d.render(dict(to='a@example.test',subject="Let's talk",body="You're welcome. <@U123>"))
+        self.assertIn("Let's talk",text);self.assertIn("You're welcome",text)
+        self.assertNotIn('&#x27;',text);self.assertNotIn('<@U123>',text)
