@@ -1,3 +1,4 @@
+import question_progress
 """Explicit Colby-requested specialist handoffs with Notion activity receipts."""
 import datetime as dt
 import hubspot_links
@@ -46,7 +47,7 @@ def accept(body,cfg):
     if mention not in e.get('text',''):return None
     text=e['text'].replace(mention,'').strip()
     if not PREFIX.match(text):return None
-    return dict(kind='lead_command',key='lead-command:'+e['channel']+':'+ts,event_id=body['event_id'],
+    return dict(progress=True,kind='lead_command',key='lead-command:'+e['channel']+':'+ts,event_id=body['event_id'],
         channel=e['channel'],ts=ts,thread_ts=thread,user=e['user'],request=text[:4000],destination=destination(text))
 
 
@@ -108,6 +109,7 @@ def process(store,job,clients,ledger,cfg,notion):
             'This routing request was interrupted. Its delivery or Notion log needs reconciliation before retrying; I will not send it again automatically.')
     elif job['state']=='pending':
         store.update(key,state='writing')
+        question_progress.working(event)
         reply='';receipt={}
         try:
             if not event.get('destination'):
@@ -161,3 +163,5 @@ def process(store,job,clients,ledger,cfg,notion):
         try:clients.say_thread(event['channel'],event['thread_ts'],current['reply'])
         except Exception:store.update(key,reply_state='review',error='lead_command_ack_unconfirmed')
         else:store.update(key,reply_state='sent')
+
+    question_progress.finished(store,key,event)

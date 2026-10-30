@@ -1,3 +1,4 @@
+import question_progress
 """Read-only, source-grounded dialogue inside reviewed lead threads."""
 import json
 import os
@@ -38,7 +39,7 @@ def accept(body,cfg):
     if mention not in e.get('text',''):return None
     question=e['text'].replace(mention,'').strip()
     if not question:return None
-    return dict(kind='lead_qa',key='lead-qa:'+e['channel']+':'+ts,event_id=body['event_id'],channel=e['channel'],ts=ts,thread_ts=thread,user=e['user'],question=question[:4000])
+    return dict(progress=True,kind='lead_qa',key='lead-qa:'+e['channel']+':'+ts,event_id=body['event_id'],channel=e['channel'],ts=ts,thread_ts=thread,user=e['user'],question=question[:4000])
 
 
 def slack_link(channel,ts):
@@ -90,7 +91,9 @@ def answer(event,sources,clients):
 
 def process(store,job,clients,ledger,cfg):
     event=json.loads(job['payload']);key=job['key']
-    if job['state']=='pending':
+    if job['state'] in ('pending','processing'):
+        store.update(key,state='processing')
+        question_progress.working(event)
         try:
             sources=context(event,clients,ledger,cfg)
             for attempt in range(2):
@@ -111,3 +114,5 @@ def process(store,job,clients,ledger,cfg):
         try:clients.say_thread(event['channel'],event['thread_ts'],current['reply'])
         except Exception:store.update(key,reply_state='review',error='lead_qa_reply_unconfirmed')
         else:store.update(key,reply_state='sent')
+
+    question_progress.finished(store,key,event)

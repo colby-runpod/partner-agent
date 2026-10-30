@@ -1,3 +1,4 @@
+import question_progress
 """Mention-triggered, Slack-only conversations. No Notion or action tools."""
 import html
 import json
@@ -47,7 +48,7 @@ def accept(body, cfg):
     thread = e.get('thread_ts', e['ts'])
     if not re.fullmatch(r'\d+\.\d+', thread):
         return None
-    return dict(event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], e['ts'])),
+    return dict(progress=True,event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], e['ts'])),
                 channel=e['channel'], ts=e['ts'], thread_ts=thread, user=e['user'], text=flatten(e))
 
 
@@ -119,15 +120,18 @@ def process(store, job, clients):
     event, key = json.loads(job['payload']), job['key']
     if job['state'] in ('pending', 'processing'):
         store.update(key, state='processing')
+        question_progress.working(event)
         try:
             context = clients.thread(event)
         except Exception:
+            store.update(key,error='chat_context_unavailable')
             text = 'I could not read the complete thread. Please check my channel access and history permissions, or paste the submission into a new mention.'
         else:
             try:
                 text = clients.answer(event, context)
             except Exception:
-                text = 'I could not generate an answer. Please check the Anthropic API key, model access, and billing in Railway, then tag me again.'
+                store.update(key,error='chat_answer_unavailable')
+                text = 'I could not generate an answer. Please check the Anthropic API key, model access, and billing in AWS, then tag me again.'
         store.update(key, state='done', reply=text)
     job = store.get(key)
     if job['reply'] and job['reply_state'] == 'pending':
@@ -140,6 +144,7 @@ def process(store, job, clients):
         else:
             store.update(key, reply_state='sent')
 
+    question_progress.finished(store,key,event)
 
 def worker():
     import fcntl
