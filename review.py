@@ -32,6 +32,7 @@ that already exists; Draft in Gmail asks the scheduled pipeline, through Next
 Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
 aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
+import hubspot_links
 import lead_commands
 import partner_sources
 import gmail_intake
@@ -298,7 +299,7 @@ def accept_review(body, cfg):
         return None
     print('Review queued digest %s' % ts, flush=True)
     return dict(kind='review', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
-                channel=e['channel'], ts=ts, thread_ts=ts, text=text[:MAX_DIGEST])
+                channel=e['channel'], ts=ts, thread_ts=ts, text=text[:MAX_DIGEST], hubspot_url=hubspot_links.extract(e))
 
 
 def accept_manual(body, cfg):
@@ -686,6 +687,8 @@ def render(review, history=None, draft_list=()):
         ('Email', partner_sources.safe(review.get('email'))), ('Region', partner_sources.safe(review.get('region'))),
         ('Lead score', partner_sources.score_badge(review)),
         ('Assessment', partner_sources.assessment(review)), ('Route', review['route']))]
+    crm = hubspot_links.canonical(review.get('hubspot_url'))
+    lines += ['• *HubSpot contact:* '+('<'+crm+'|View contact in HubSpot>' if crm else 'Not available in the original submission')]
     if review.get('headline'):
         lines += ['', review['headline']]
     if review['decision'] == 'do_not_pursue':
@@ -765,7 +768,7 @@ class Ledger:
             if review:
                 keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
                                                'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
-                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals')}
+                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals', 'hubspot_url')}
                 keep['source_event'] = dict(event)
                 keep['checks'] = r.get('checks', {})
                 keep['drafts'] = [list(d) for d in r.get('drafts', [])]
@@ -860,6 +863,7 @@ class ReviewClients:
         text = flatten(parent)
         if parent.get('bot_id') not in self.cfg['review_bots'] or not any(m in text for m in DIGEST_MARKERS):
             raise NotDigest()
+        event['hubspot_url'] = hubspot_links.extract(parent)
         return text[:MAX_DIGEST]
 
     def _call(self, payload):
@@ -885,6 +889,9 @@ class ReviewClients:
 
     def review(self, event):
         self.last = None
+        if 'hubspot_url' not in event and event.get('kind') == 'review':
+            try: self.parent(event)
+            except Exception: pass
         history = self.lookup(event['text'])
         context = history if isinstance(history, dict) else (history or 'not_configured')
         messages = [{'role': 'user', 'content': json.dumps({'hubspot_digest': event['text'],
@@ -912,6 +919,7 @@ class ReviewClients:
         submitted = dt.datetime.utcfromtimestamp(float(event['thread_ts']))
         result['drafts'] = drafts(result, email, submitted)
         result['email'], result['submitted'] = email, submitted.strftime('%Y-%m-%d')
+        result['hubspot_url'] = hubspot_links.source_url(event)
         self.last = result
         return render(result, history, result['drafts'])
 
@@ -1308,6 +1316,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
             if not isinstance(data.get('signals'), dict) or not data.get('source_event'):
                 clients.ephemeral(event, 'This older card lacks saved routing details. Request a fresh review first.')
                 return
+            hubspot_links.hydrate(data, clients)
             target = ROUTING_ACTIONS[event['action']][0]
             route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
             if route_job is None:

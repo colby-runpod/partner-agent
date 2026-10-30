@@ -1,4 +1,5 @@
 """Explicit Colby-approved Slack intake and durable specialist handoffs."""
+import hubspot_links
 import hashlib
 import html
 import json
@@ -49,7 +50,7 @@ def process_forward(store, job, clients, cfg):
     if approved:
         key = ':'.join((cfg['team_id'], event['channel'], event['ts']))
         store.enqueue(dict(event, kind='review_forward', key=key, event_id='forward:'+key,
-                           user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], text=flatten(msg)[:20000], source_type='slack_forward'))
+                           user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], text=flatten(msg)[:20000], hubspot_url=hubspot_links.extract(msg), source_type='slack_forward'))
     store.update(job['key'], state='done')
 
 
@@ -139,8 +140,8 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         text += '\n*Original warnings:* '+safe('; '.join(warnings) or 'No blocker flagged; original qualification remains unchanged.')
     text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
-    crm = re.search(r'https://app\.hubspot\.com/contacts/[0-9]+/(?:contact|record/0-1)/[0-9]+', event.get('text', ''))
-    text += ('\n• <%s|HubSpot contact>' % crm.group(0) if crm else '\n• HubSpot: Not provided in the source')
+    crm = hubspot_links.source_url(event)
+    text += ('\n• <%s|HubSpot contact>' % crm if crm else '\n• HubSpot: Not available in the original submission')
     text += '\n\ncc <@%s>' % COLBY
     return dict(kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
 
