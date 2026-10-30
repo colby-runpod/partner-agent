@@ -1,5 +1,6 @@
 """Explicit Colby-approved Slack intake and durable specialist handoffs."""
 import knowledge
+import question_progress
 import hashlib
 import html
 import json
@@ -51,8 +52,9 @@ def process_forward(store, job, clients, cfg):
     inquiry = knowledge.question(msg, cfg['bot_user']) if cfg.get('knowledge_enabled') else None
     # Share the review key: a later eyes reaction cannot change an answered question into a lead.
     if inquiry and not approved and msg.get('user') == COLBY and not msg.get('bot_id'):
-        store.enqueue(dict(event, kind='knowledge', key=key, event_id='knowledge:'+key,
+        inserted=store.enqueue(dict(event, progress=True, kind='knowledge', key=key, event_id='knowledge:'+key,
                            user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], question=inquiry))
+        if inserted:question_progress.received(store,dict(event,progress=True,key=key))
     elif approved:
         store.enqueue(dict(event, kind='review_forward', key=key, event_id='forward:'+key,
                            user=COLBY, thread_ts=msg.get('thread_ts') or event['ts'], text=flatten(msg)[:20000], source_type='slack_forward'))

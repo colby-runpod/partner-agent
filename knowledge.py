@@ -1,4 +1,5 @@
 """Read-only, exact-page allowlisted Partnerships Q&A. No autonomous tools."""
+import question_progress
 import html
 import json
 import os
@@ -167,13 +168,16 @@ def process(store, job, clients):
     event, key = json.loads(job['payload']), job['key']
     if job['state'] in ('pending','processing'):
         store.update(key,state='processing')
+        question_progress.working(event)
         try:
             sources, unavailable = clients.sources()
             if not sources:
+                store.update(key,error='knowledge_sources_unavailable')
                 text='I could not read the approved Partnerships sources. I have not checked other pages or taken any action. Please try again after Notion access is restored.'
             else:
                 text=render(clients.answer(event['question'],sources),sources,unavailable)
         except Exception:
+            store.update(key,error='knowledge_answer_unavailable')
             text='I could not produce a source-backed answer from the approved Partnerships pages. Please ask again; no lead was created or routed.'
         store.update(key,state='done',reply=text)
     job=store.get(key)
@@ -186,3 +190,5 @@ def process(store, job, clients):
             store.update(key,reply_state='review',error='knowledge_reply_unconfirmed')
         else:
             store.update(key,reply_state='sent',ref=ts)
+
+    question_progress.finished(store,key,event)
