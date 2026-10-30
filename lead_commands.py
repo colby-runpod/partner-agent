@@ -1,5 +1,6 @@
 """Explicit Colby-requested specialist handoffs with Notion activity receipts."""
 import datetime as dt
+import hubspot_links
 import html
 import json
 import re
@@ -118,6 +119,7 @@ def process(store,job,clients,ledger,cfg,notion):
                 if not row:raise NeedsReview()
                 data=json.loads(row.get('data') or '{}')
                 if not data.get('source_event') or not isinstance(data.get('signals'),dict):raise NeedsReview()
+                hubspot_links.hydrate(data,clients)
                 target,channel=DESTINATIONS[event['destination']]
                 handoff=routes.handoff(data,data['source_event'],cfg,requested_route=target,requested_by=routes.COLBY)
                 if not handoff:
@@ -128,7 +130,7 @@ def process(store,job,clients,ledger,cfg,notion):
                     store.update(key,ref=json.dumps(receipt))
                     stamp=dt.datetime.fromtimestamp(float(event['ts']),dt.timezone.utc).isoformat()
                     activity=('Requested by Colby Henderson ('+event['user']+') at '+stamp+'\nRequest: '+event['request']+
-                        '\nRequest link: '+link(event)+'\nDestination: '+target+' ('+channel+')'+
+                        '\nRequest link: '+link(event)+'\nHubSpot contact: '+(data.get('hubspot_url') or 'Not available in original submission')+'\nDestination: '+target+' ('+channel+')'+
                         '\nOriginal score: '+str(data.get('score'))+'; assessment: '+routes.assessment(data)+
                         '\nOriginal signals: '+json.dumps(data.get('signals'),ensure_ascii=False)+
                         '\nForwarded for specialist validation at Colby’s request; not qualification, approval or outreach.')
