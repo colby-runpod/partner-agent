@@ -143,7 +143,7 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     crm = hubspot_links.source_url(event)
     text += ('\n• <%s|HubSpot contact>' % crm if crm else '\n• HubSpot: Not available in the original submission')
     text += '\n\ncc <@%s>' % COLBY
-    return dict(kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
+    return dict(completion_source=event,completion_route=route,kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
 
 
 def process_handoff(store, job, clients):
@@ -160,3 +160,6 @@ def process_handoff(store, job, clients):
         store.update(job['key'],state='done',error='handoff_send_unconfirmed')
     else:
         store.update(job['key'],state='done',ref=ts,result_url='https://slack.com/archives/%s/p%s'%(event['channel'],ts.replace('.','')))
+
+        import lead_completion
+        lead_completion.enqueue_handoff(store,event,event.get('completion_source') or {},event.get('completion_route'))
