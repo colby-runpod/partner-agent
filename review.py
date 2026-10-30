@@ -33,6 +33,7 @@ Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
 aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
 import hubspot_links
+import lead_qa
 import lead_commands
 import partner_sources
 import gmail_intake
@@ -360,7 +361,7 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or tasks.accept_task(body, cfg) or \
+    event = lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or lead_qa.accept(body, cfg) or tasks.accept_task(body, cfg) or \
         assistant.accept_agent(body, cfg)
     if event:
         return event
@@ -1596,6 +1597,8 @@ def worker():
                 except Exception:
                     store.update(job['key'], state='done', error='forward_approval_check_failed')
                     print('Forward approval check unavailable; reapply approval after fixing Slack access.', flush=True)
+            elif json.loads(job['payload']).get('kind') == 'lead_qa':
+                lead_qa.process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'lead_command':
                 lead_commands.process(store, job, review_clients, ledger, cfg, notion)
             elif json.loads(job['payload']).get('kind') == 'specialist_handoff':
