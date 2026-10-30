@@ -6,6 +6,7 @@ import html
 import json
 import os
 import storage
+import question_progress
 import fresh_start
 from pathlib import Path
 import re
@@ -308,7 +309,8 @@ class Application:
                     return respond('200 OK', {'ok': True})
                 event = self.event_filter(body, self.cfg)
                 if event:
-                    self.store.enqueue(event)
+                    if self.store.enqueue(event):
+                        question_progress.received(self.store,event)
             return respond('200 OK', {'ok': True})
         except (ValueError, TypeError, KeyError, AttributeError):
             return respond('400 Bad Request', {})

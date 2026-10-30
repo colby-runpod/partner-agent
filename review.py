@@ -33,6 +33,7 @@ Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
 aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
 import hubspot_links
+import question_progress
 import lead_qa
 import lead_commands
 import partner_sources
@@ -323,7 +324,7 @@ def accept_manual(body, cfg):
         return None  # Must be a reply inside the digest's thread.
     if not (TRIGGER.match(e.get('text', '')) or POLITE_TRIGGER.match(e.get('text', ''))):
         return None
-    return dict(kind='review_manual', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
+    return dict(progress=True,kind='review_manual', event_id=body['event_id'], key=':'.join((body['team_id'], e['channel'], ts)),
                 channel=e['channel'], ts=ts, thread_ts=thread, user=e['user'], text='')
 
 
@@ -1027,6 +1028,7 @@ def process(store, job, clients, ledger=None, cfg=None):
     event, key = json.loads(job['payload']), job['key']
     if job['state'] in ('pending', 'processing'):
         store.update(key, state='processing')
+        question_progress.working(event)
         outcome = 'ok'
         try:
             if event.get('kind') == 'review_manual':
@@ -1050,7 +1052,7 @@ def process(store, job, clients, ledger=None, cfg=None):
             text, outcome = THREAD_UNREADABLE, 'unreadable'
         except Exception:
             text, outcome = FAILED, 'failed'
-        store.update(key, state='done', reply=text)
+        store.update(key, state='done', reply=text,error='' if outcome=='ok' else 'review_'+outcome)
         if ledger and outcome != 'not_digest':
             try:
                 ledger.record(key, event, getattr(clients, 'last', None) if outcome == 'ok' else None, outcome)
@@ -1086,6 +1088,7 @@ def process(store, job, clients, ledger=None, cfg=None):
                     ledger.mark(key, card_text=text)
             except Exception:
                 print('Review ledger write failed.', flush=True)
+    question_progress.finished(store,key,event)
 
 
 def prior_line(prev, review):

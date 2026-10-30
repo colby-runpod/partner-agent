@@ -45,3 +45,19 @@ class LeadQA(unittest.TestCase):
             s=Store(d+'/q');e=qa.accept(self.body(),CFG);s.enqueue(e);c=Mock();c.say_thread.side_effect=TimeoutError()
             qa.process(s,s.get(e['key']),c,Mock(),CFG);qa.process(s,s.get(e['key']),c,Mock(),CFG)
             c.say_thread.assert_called_once();self.assertEqual(s.get(e['key'])['reply_state'],'review')
+
+    @patch('lead_qa.context',return_value=[])
+    @patch('lead_qa.answer',side_effect=[ValueError('Invalid answer'),'Recovered answer'])
+    def test_one_bounded_retry_before_any_post(self,answer,context):
+        with tempfile.TemporaryDirectory() as d:
+            s=Store(d+'/q');e=qa.accept(self.body(),CFG);s.enqueue(e);c=Mock()
+            qa.process(s,s.get(e['key']),c,Mock(),CFG)
+            self.assertEqual(answer.call_count,2);c.say_thread.assert_called_once_with('C','10.1','Recovered answer')
+            self.assertFalse(s.get(e['key']).get('error'))
+
+    @patch.dict(os.environ,{'ANTHROPIC_MODEL':'test'})
+    def test_fenced_json_remains_validated(self):
+        c=Mock();sources=[dict(id=i,url='https://slack.com/a',label=str(i)) for i in (1,2,3)]
+        for fence in ('```json\n','```\n'):
+            c._call.return_value=dict(stop_reason='end_turn',content=[dict(type='text',text=fence+json.dumps(dict(answer='A sales inquiry, not yet qualified.',sources=[1]))+'\n```')])
+            self.assertIn('A sales inquiry',qa.answer({'question':'sales?'},sources,c))
