@@ -1476,6 +1476,22 @@ def summary_due(cfg, ledger, now_utc):
             and not state.get('pending') and state.get('last_date') != local.strftime('%Y-%m-%d'))
 
 
+def summary_action(row, receipts):
+    """Only a verified Notion completion receipt closes intake work."""
+    source = json.loads(row.get('data') or '{}').get('source_event') or {}
+    timestamps = {row['ts'], row.get('card_ts'), source.get('thread_ts')} - {None, ''}
+    for receipt in receipts:
+        event = json.loads(receipt['payload'])
+        result = json.loads(receipt['ref'])
+        if (event.get('channel') == row['channel'] and
+                (event.get('review_key') == row['key'] or event.get('ts') in timestamps) and
+                result.get('notion_id') and result.get('status') in ('Actioned', 'Closed') and receipt.get('result_url')):
+            return 'actioned', ':white_check_mark: Actioned · <%s|%s in Notion>' % (receipt['result_url'], result['status'])
+    if row.get('parked_by'):
+        return 'parked', ':parking: Parked'
+    return 'needs_action', ':hourglass_flowing_sand: Needs action'
+
+
 def build_summary(cfg, rows, clients, now_utc, store=None):
     local = mountain(now_utc)
     # A new review of the same source is an update, not another lead.
@@ -1488,6 +1504,8 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
         unique[(row['channel'], row['ts'])] = row
     rows = list(unique.values())
     ok = [r for r in rows if r['outcome'] == 'ok']
+    receipts = store.completion_receipts() if store else []
+    actions = {r['key']: summary_action(r, receipts) for r in ok}
     counts = {d: sum(1 for r in ok if r['decision'] == d) for d in DECISIONS}
     lines = ['*Partner submissions · %s*' % local.strftime('%a %b %-d'),
              '_Coverage: AWS-reviewed Slack submissions and approved forwards. Claude/Gmail leads excluded._']
@@ -1496,6 +1514,10 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
     else:
         lines.append('%d reviewed: %s' % (len(ok), '  ·  '.join('%s %d' % (DECISIONS[d], counts[d])
                                                              for d in DECISIONS if counts[d]) or 'none'))
+        lines.append('Action status: %d actioned · %d needs action · %d parked' % tuple(
+            sum(1 for status, _ in actions.values() if status == kind)
+            for kind in ('actioned', 'needs_action', 'parked')))
+        lines.append('_Actioned means intake handled; it does not imply partner approval or receiving-team follow-up._')
         order = ['pursue', 'triage', 'redirect', 'do_not_pursue']
         for r in sorted(ok, key=lambda r: (order.index(r['decision']) if r['decision'] in order else 9, r['created']))[:25]:
             label = _link(clients, r['channel'], r['ts'], r['company'] or 'submission')
@@ -1504,7 +1526,8 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
                                                 '  ·  parked' if r.get('parked_by') else
                                                 '  ·  in Notion' if r.get('notion_url') else ''))
             data = json.loads(r.get('data') or '{}')
-            if data.get('next_step'):
+            lines.append('  '+actions[r['key']][1])
+            if data.get('next_step') and actions[r['key']][0] == 'needs_action':
                 lines.append('  Next: '+_clean(data['next_step'],180))
             if store and data:
                 for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela'),
@@ -1516,7 +1539,7 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
                     except TypeError:  # SQLite's absent-row result; DB errors must still abort the report.
                         handoff = None
                     if handoff:
-                        if handoff.get('ref') and handoff.get('result_url'):
+                        if handoff.get('ref') and handoff.get('result_url') and not handoff.get('error'):
                             lines.append('  Handoff: <%s|Delivered to %s>' % (handoff['result_url'],owner))
                         elif handoff['state'] == 'pending':
                             lines.append('  Handoff to %s: queued, not yet delivered.' % owner)
