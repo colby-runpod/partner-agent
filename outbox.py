@@ -21,7 +21,8 @@ COLBY = 'U0BEHPEJA6L'
 NOTION_COLBY = '38dd872b-594c-8152-9d06-0002630c4d98'
 BOT = 'U0C7372ET45'
 WEEKLY_CHANNEL = 'C0CARSDJ4H0'
-CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T', WEEKLY_CHANNEL}
+SIGNAL_CHANNEL = 'C0BN1S7055G'
+CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T', WEEKLY_CHANNEL, SIGNAL_CHANNEL}
 ACTIONS = {'outbox_approve': 'Approve', 'outbox_decline': 'Decline', 'outbox_call': 'Call first'}
 KINDS = {'supply_lead', 'event_request', 'priority_alert', 'daily_digest', 'invitation_queue', 'other'}
 
@@ -58,6 +59,16 @@ def payload(r):
         raise ValueError('channel not allowed')
     if r['kind'] not in KINDS or not r['body'] or len(r['body']) > 35000:
         raise ValueError('Invalid kind or message body')
+    if r['channel'] == SIGNAL_CHANNEL:
+        if r['kind'] != 'other' or r['mentions'].strip() or r['thread']:
+            raise ValueError('Signal summaries require Kind=other and empty Mention IDs and Thread TS')
+        match = re.fullmatch(r'partner-signal-enrichment:(\d{4}-\d{2}-\d{2})', r.get('title', ''))
+        if not match:
+            raise ValueError('Signal title must be partner-signal-enrichment:YYYY-MM-DD')
+        if dt.date.fromisoformat(match[1]).weekday() != 0:
+            raise ValueError('Signal title requires a Monday date')
+        if re.search(r'<@|<!(?:here|channel|everyone|subteam)(?:[>|^])', r['body'], re.I):
+            raise ValueError('Signal Body must not contain Slack mentions; Colby cc is added by the agent')
     if r['channel'] == WEEKLY_CHANNEL:
         if r['kind'] != 'other' or r['mentions'].strip() or r['thread']:
             raise ValueError('Weekly updates require Kind=other, empty Mention IDs and empty Thread TS')
@@ -78,9 +89,11 @@ def payload(r):
     if r['thread'] and not re.fullmatch(r'\d+\.\d+', r['thread']):
         raise ValueError('Invalid thread timestamp')
     text = (' '.join('<@%s>' % x for x in ids)+'\n' if ids else '') + r['body']
+    if r['channel'] == SIGNAL_CHANNEL:
+        text += '\n\ncc <@%s>' % COLBY
     p = dict(channel=r['channel'], text=text, mrkdwn=True, unfurl_links=False, unfurl_media=False,
              client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL, 'partner-outbox:'+r['id'])))
-    if r['channel'] == WEEKLY_CHANNEL:
+    if r['channel'] in (WEEKLY_CHANNEL, SIGNAL_CHANNEL):
         p.update(parse='none',link_names=False)
     if r['thread']:
         p['thread_ts'] = r['thread']
@@ -145,6 +158,7 @@ class Outbox:
     def __init__(self, path, remote=None, storage=None):
         self.path=path; self.remote=remote or Remote(); self.verified=False
         self.storage=storage
+        self.signal_enabled = os.environ.get('SIGNAL_OUTBOX_ENABLED') == 'true'
         self.weekly_enabled = os.environ.get('WEEKLY_OUTBOX_ENABLED') == 'true'
         raw = os.environ.get('OUTBOX_TEST_IDS')
         self.test_ids = None if raw is None else {str(uuid.UUID(x.strip())) for x in raw.split(',')}
@@ -170,6 +184,8 @@ class Outbox:
         try: return self.timestamp(page.get('created_time')) > self.created_after
         except (ValueError,TypeError): return False
     def selected(self, id, snapshot=None):
+        if snapshot and snapshot.get('channel') == SIGNAL_CHANNEL:
+            return self.signal_enabled
         if snapshot and snapshot.get('channel') == WEEKLY_CHANNEL:
             return self.weekly_enabled
         return self.test_ids is None or str(uuid.UUID(id)) in self.test_ids
@@ -301,8 +317,8 @@ class Outbox:
             if due > dt.datetime.now(dt.timezone.utc): return
         if r['channel'] not in CHANNELS:
             self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('channel not allowed')});return
-        if r['channel']==WEEKLY_CHANNEL and r['thread']:
-            self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Weekly updates require empty Thread TS')});return
+        if r['channel'] in (WEEKLY_CHANNEL, SIGNAL_CHANNEL) and r['thread']:
+            self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Summary posts require empty Thread TS')});return
         if r['thread'].startswith('parent:'):
             match=re.fullmatch(r'parent:OUT-(\d+)',r['thread'])
             if not match:
@@ -321,7 +337,7 @@ class Outbox:
         fresh = self.remote.get(r['id'])
         if not self.eligible(fresh): return
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
-        if r['channel']==WEEKLY_CHANNEL and row(fresh)!=r: return  # Revalidate edited weekly content on the next poll.
+        if r['channel'] in (WEEKLY_CHANNEL, SIGNAL_CHANNEL) and row(fresh)!=r: return  # Revalidate edited weekly content on the next poll.
         if r['channel']==WEEKLY_CHANNEL and os.environ.get('WEEKLY_FEEDBACK_ENABLED')=='true':
             import weekly_feedback
             r['weekly_draft_id']=weekly_feedback.resolve_draft(self.remote,r)
@@ -397,7 +413,7 @@ def accept(body,cfg):
     elif e.get('type')=='message' and not e.get('subtype') and e.get('thread_ts') and e['thread_ts']!=e.get('ts'):
         channel,ts=e.get('channel'),e['thread_ts']
     else: return
-    if channel==WEEKLY_CHANNEL: return  # Team feedback only; no bot processing.
+    if channel in (WEEKLY_CHANNEL, SIGNAL_CHANNEL): return  # Team feedback only; no bot processing.
     if channel not in CHANNELS or not re.fullmatch(r'\d+\.\d+',ts or ''): return
     if not owns(channel,ts): return
     key='outbox:'+body['event_id']
