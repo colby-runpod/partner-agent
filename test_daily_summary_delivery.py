@@ -68,8 +68,41 @@ class DailySummaryDelivery(unittest.TestCase):
     def test_handoff_status_uses_receipt_not_assumed_route(self):
         data=review.parse(json.dumps(GOOD));data['email']='a@example.com'
         self.ledger.record('k',dict(channel='C1',ts='100.1',thread_ts='100.1'),data,'ok',now=1)
-        store=Mock();store.get.side_effect=[{'state':'done','ref':'1.2','result_url':'https://slack.com/archives/C1/p12'},
+        store=Mock();store.completion_receipts.return_value=[];store.get.side_effect=[{'state':'done','ref':'1.2','result_url':'https://slack.com/archives/C1/p12'},
                                            {'state':'done','ref':None,'result_url':None},
                                            {'state':'done','ref':'3.4','result_url':'https://slack.com/archives/CVC/p34'},None,None]
         text=review.build_summary(CFG,self.ledger.since(0),self.client,self.now,store)
         self.assertIn('Delivered to Cameron',text);self.assertIn('Delivered to Dean',text);self.assertIn('Adriana and Carmela: unconfirmed',text)
+
+    def test_completion_receipt_beats_park_and_preserves_score(self):
+        row=dict(key='k',channel='C1',ts='1.1',card_ts='2.2',data='{}',parked_by='colby')
+        receipt=dict(payload=json.dumps(dict(channel='C1',ts='2.2')),
+                     ref=json.dumps(dict(notion_id='page',status='Actioned')),result_url='https://notion.so/page')
+        self.assertEqual(review.summary_action(row,[])[0],'parked')
+        self.assertEqual(review.summary_action(row,[receipt])[0],'actioned')
+        row['parked_by']=None
+        receipt['payload']=json.dumps(dict(channel='C1',ts='3.3')) # Q&A check is not lead completion
+        self.assertEqual(review.summary_action(row,[receipt])[0],'needs_action')
+
+    def test_summary_totals_include_leads_beyond_display_limit(self):
+        rows=[]
+        for i in range(27):
+            data=review.parse(json.dumps(GOOD))
+            self.ledger.record(str(i),dict(channel='C1',ts=str(i)+'.1',thread_ts=str(i)+'.1'),data,'ok',now=i+1)
+        text=review.build_summary(CFG,self.ledger.since(0),self.client,self.now)
+        self.assertIn('0 actioned · 27 needs action · 0 parked',text)
+        self.assertIn('Plus 2 additional',text)
+
+    def test_persisted_completion_counted_even_when_slack_marker_failed(self):
+        from intake import Store
+        store=Store(self.ledger.path)
+        data=review.parse(json.dumps(GOOD))
+        self.ledger.record('k',dict(channel='C1',ts='100.1',thread_ts='100.1'),data,'ok',now=1)
+        key='lead-completion:test'
+        store.enqueue(dict(key=key,event_id=key,channel='C1',ts='100.1',review_key='k'))
+        store.update(key,state='done',ref=json.dumps(dict(notion_id='page',status='Actioned')),
+                     result_url='https://notion.so/page',error='completion_reaction_unconfirmed')
+        text=review.build_summary(CFG,self.ledger.since(0),self.client,self.now,store)
+        self.assertIn('1 actioned · 0 needs action · 0 parked',text)
+        self.assertIn('Actioned in Notion',text)
+        self.assertNotIn('  Next:',text)

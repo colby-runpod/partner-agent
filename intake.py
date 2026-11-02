@@ -146,6 +146,11 @@ class Store:
         with self.connect() as db:
             return dict(db.execute('SELECT * FROM intake_jobs WHERE key=?', (key,)).fetchone())
 
+    def completion_receipts(self):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT payload,ref,result_url FROM intake_jobs WHERE key LIKE 'lead-completion:%' AND ref IS NOT NULL")]
+
     def next_job(self):
         with self.connect() as db:
             row = db.execute("SELECT * FROM intake_jobs WHERE state IN ('pending','processing','writing') OR (reply IS NOT NULL AND reply_state='pending') ORDER BY rowid LIMIT 1").fetchone()

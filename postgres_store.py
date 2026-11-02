@@ -59,6 +59,11 @@ class PostgresStore:
             return db.execute('SELECT * FROM partner_agent.jobs WHERE namespace=%s AND key=%s',
                               (self.namespace,key)).fetchone()
 
+    def completion_receipts(self):
+        with self.connect() as db:
+            return db.execute("SELECT payload,ref,result_url FROM partner_agent.jobs WHERE namespace=%s AND key LIKE 'lead-completion:%%' AND ref IS NOT NULL",
+                              (self.namespace,)).fetchall()
+
     def update(self, key, **fields):
         if not fields or not fields.keys() <= {'state','ref','result_url','reply','reply_state','error'}:
             raise ValueError('Invalid job fields')

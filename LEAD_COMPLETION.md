@@ -14,3 +14,11 @@ Actioned means Partnerships intake/handoff is complete, not that the receiving t
 This release is Slack/action-driven. It does not poll arbitrary Notion status edits or automatically reopen a record when a check is removed. Explicit reopening and Notion-to-Slack status synchronization remain separate work.
 
 Includes the pending Slack draft-formatting fix from codex/draft-slack-formatting.
+
+## Daily recap action status
+
+Each reviewed lead in the recap has a separate Actioned, Needs action, or Parked label and the recap includes totals across all reviewed leads in the reporting window (including leads beyond the 25-item display limit). Qualification scores remain unchanged.
+
+Actioned requires a stored completion receipt confirming the Notion update, matched to the source lead or its review card. It links to the Notion record; confirmed specialist handoff links remain visible. A failed Slack marker does not erase a confirmed Notion completion. A queued or uncertain handoff, Notion record creation alone, email draft, or Q&A check does not count as actioned. Confirmed completion takes precedence over an earlier park flag. Completed and parked leads do not repeat the original suggested next step.
+
+This reports agent-recorded status at recap time. Direct later edits to Notion are not polled, and previously posted recaps are not rewritten. The reporting window remains new/reviewed Slack leads, not the entire historical backlog; Gmail remains excluded.
