@@ -160,6 +160,15 @@ Partner Ecosystem once you approve", "Route to Carmela and Adriana (events)", "C
 Candidate Review". Never suggest promising credits, pricing, capacity, partner status, deal
 protection, commission, resale rights or exclusivity.
 
+Request clarity fields (based on the original submission, not the assessment or routing):
+- requested_partnership: plain-language partnership model; say "Unspecified partnership inquiry" if missing. Prefix an inferred model with "Inferred:". Route is internal ownership, not the requested model.
+- requested_action: what they want Runpod to do; include a short exact quote when useful. If they only say "partner", say no specific action was provided. Do not invent commercial terms.
+- offered_value: what they propose to bring (customers, capacity, technology, audience, funding). Say "Not provided" when absent; attribute unverified claims to the submitter.
+Each field must be a complete sentence or phrase under 300 characters.
+Missing evidence, a personal email, or geography alone do not establish misrepresentation or fraud.
+A reply does not commit Runpod to terms. Distinguish unverified from false. Cite actual evidence URLs,
+not generic search homepages. Prefer parking a generic incomplete inquiry over requesting an open-ended discovery call.
+
 Drafting fields (used to build copy-ready drafts; keep them plain and specific):
 - first_name: the contact's first name as they would use it.
 - company_short: the company name as people say it, without legal suffixes.
@@ -191,6 +200,7 @@ Return exactly this JSON shape:
              "specific_motion": false, "named_customer": false, "quantified_volume": false,
              "warm_intro": false, "notable_counterparty": false, "already_in_play": false,
              "blocker": ""},
+ "requested_partnership": "", "requested_action": "", "offered_value": "",
  "summary": "", "why": "", "headline": "", "next_step": "", "probe_ask": "", "region": "",
  "dean_motion": "", "event_motion": "", "risks": [""], "sources": [{"title": "", "url": "https://..."}]}''' % (
     ', '.join(TYPES), ', '.join(ROUTES))
@@ -214,7 +224,7 @@ C commercial: 0 none, 1 vague claims, 2 quantified volume/client base/capacity o
 3 live customer deal/committed capacity or timeline under 90 days.
 V strategic value: 0 none, 1 ordinary fit, 2 concrete integration/user-base/distribution, 3 major strategic value.
 Also include risk (none, policy_review, misrepresentation, spam), risk_evidence (specific finding;
-never a country alone), wrong_door (empty, vendor, sales, credits, startup, affiliate, subscale_supply),
+never a country alone; lack of verification, Gmail, or a new account is not evidence of misrepresentation), wrong_door (empty, vendor, sales, credits, startup, affiliate, subscale_supply),
 predevelopment_supply (boolean), blank_payload (boolean), hubspot_checked (false; no HubSpot tool here),
 own_domain (boolean: verified match, never inferred solely from identity score), teammate_referred,
 unverifiable (boolean), research {registry, linkedin, directories, press, gmail} with actual results.
@@ -579,6 +589,9 @@ def parse(raw, screening_v2=False):
         'first_name': _plain(data.get('first_name'), 40) or 'there',
         'partnership_type': pick(data.get('partnership_type'), TYPES, 'Misrouted / Other'),
         'route': pick(data.get('route'), ROUTES, 'Review Needed'),
+        'requested_partnership': _clean(data.get('requested_partnership'), 400) or 'Unspecified partnership inquiry',
+        'requested_action': _clean(data.get('requested_action'), 400) or 'No specific request captured; see the original submission.',
+        'offered_value': _clean(data.get('offered_value'), 400) or 'Not provided',
         'summary': _clean(data.get('summary'), 600),
         'why': _clean(data.get('why'), 600),
         'headline': _clean(data.get('headline'), 90),
@@ -693,8 +706,9 @@ def render(review, history=None, draft_list=()):
         ('Assessment', partner_sources.assessment(review)), ('Route', review['route']))]
     crm = hubspot_links.canonical(review.get('hubspot_url'))
     lines += ['• *HubSpot contact:* '+('<'+crm+'|View contact in HubSpot>' if crm else 'Not available in the original submission')]
-    if review.get('headline'):
-        lines += ['', review['headline']]
+    lines += ['', '*Partnership requested:* '+review.get('requested_partnership', 'Not captured in this saved review'),
+              '*Their request:* '+review.get('requested_action', 'See the original submission'),
+              '*What they bring:* '+review.get('offered_value', 'Not captured in this saved review')]
     if review['decision'] == 'do_not_pursue':
         step = 'No action.'
     elif review['decision'] == 'redirect':
@@ -709,6 +723,8 @@ def render(review, history=None, draft_list=()):
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
         lines.append(':octagonal_sign: *Clear first:* ' + review['signals']['blocker'])
+    if review.get('headline'):
+        lines += ['', review['headline']]
     if review['summary']:
         lines += ['', review['summary']]
     lines += ['', '*Checks*']
@@ -772,7 +788,7 @@ class Ledger:
             if review:
                 keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
                                                'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
-                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals', 'hubspot_url')}
+                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals', 'hubspot_url', 'requested_partnership', 'requested_action', 'offered_value')}
                 keep['source_event'] = dict(event)
                 keep['checks'] = r.get('checks', {})
                 keep['drafts'] = [list(d) for d in r.get('drafts', [])]
