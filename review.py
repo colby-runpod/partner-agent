@@ -148,7 +148,7 @@ Routes:
 - Influencer/Creator: paid content, creator sponsorship, directory or listing proposals without explicit affiliate-program intent. Do not assume all creators want the affiliate program.
 - Research/University: an institution, lab or researcher asking for compute for research, teaching or
   a cohort with a real workload. A university buying capacity is Sales.
-- Startup Program: startup credits or accelerator asks. Self-serve.
+- Startup Program: individual startup credits or accelerator asks. Route to Cameron for program eligibility and application guidance; do not promise acceptance or credits.
 - Partnerships: reseller, technology/integration, AI/model, co-marketing, VC/PE/incubator, referral,
   SI, consultancy or MSP motions.
 - Product/Eng: technology Runpod would consume, where a specific team would plausibly want it.

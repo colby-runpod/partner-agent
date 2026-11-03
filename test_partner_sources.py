@@ -60,7 +60,7 @@ class Sources(unittest.TestCase):
         b=src.handoff(dict(r,email='test@example.com'),dict(e,key='gmail:other'),CFG)
         self.assertEqual(a['key'],b['key'])
         for tier in ('DQ','Hold for Colby','Needs research','Route'):
-            self.assertIsNone(src.handoff(dict(r,screening={'tier':tier}),e,CFG))
+            self.assertIsNotNone(src.handoff(dict(r,screening={'tier':tier}),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'blocker':'risk'}),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'already_in_play':True}),e,CFG))
         self.assertEqual(src.handoff(dict(r,route='Research/University'),e,CFG)['channel'],src.RESEARCH_CHANNEL)
@@ -124,7 +124,7 @@ class RoutingActions(unittest.TestCase):
         review.process_action(self.store,self.store.get(event['key']),self.client,self.ledger,self.cfg)
 
     def test_manual_low_score_routes_once_without_notion(self):
-        self.assertIsNone(src.handoff(self.data,self.event,self.cfg))
+        self.assertIsNotNone(src.handoff(self.data,self.event,self.cfg))
         self.act(); self.act(ts='300.2')
         self.client.send_handoff.assert_called_once()
         sent=self.client.send_handoff.call_args.args[0]
@@ -209,7 +209,7 @@ class VCRouting(RoutingActions):
         data=dict(self.data,route='Partnerships',partnership_type='VC/PE/Incubator',screening={'tier':'Qualify'})
         self.assertIsNotNone(src.handoff(data,self.event,self.cfg))
         self.assertIsNone(src.handoff(dict(data,partnership_type='Reseller/VAR'),self.event,self.cfg))
-        self.assertIsNone(src.handoff(dict(data,screening={'tier':'Hold for Colby'}),self.event,self.cfg))
+        self.assertIsNotNone(src.handoff(dict(data,screening={'tier':'Hold for Colby'}),self.event,self.cfg))
         for signal in ('spam','blocker','already_in_play'):
             self.assertIsNone(src.handoff(dict(data,signals={signal:True}),self.event,self.cfg,requested_route=src.VC_ROUTE))
         self.assertIsNone(src.handoff(data,self.event,dict(self.cfg,routing_enabled=False)))
@@ -250,3 +250,31 @@ class AffiliateChannelLog(unittest.TestCase):
             self.assertIsNone(src.handoff(dict(r,route=route,partnership_type='Referral'),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
         self.assertIsNone(src.handoff(r,e,dict(CFG,routing_enabled=False)))
+
+class AutomaticSpecialistRouting(unittest.TestCase):
+    def test_all_specialists_ignore_score_and_tier_but_preserve_risk_gates(self):
+        e=dict(key='new',channel='C123',ts='100.1')
+        routes={'Supply Team':'C0CAL8C08RK','Events/Sponsorship':'C0CAKA6PW8K',
+                'Startup Program':src.VC_CHANNEL,src.VC_ROUTE:src.VC_CHANNEL,
+                'Research/University':src.RESEARCH_CHANNEL,'Affiliate Program':src.AFFILIATE_CHANNEL}
+        for route,channel in routes.items():
+            for score in (1,2,'DQ'):
+                r=dict(route=route,score=score,screening={'tier':'Park'},signals={},requested_action='Review our request')
+                job=src.handoff(r,e,CFG)
+                self.assertEqual(job['channel'],channel)
+                self.assertIn('Automatically routed',job['text'])
+                self.assertIn('Ask from Runpod:* Review our request',job['text'])
+                for flag in ('spam','blocker','already_in_play'):
+                    self.assertIsNone(src.handoff(dict(r,signals={flag:True}),e,CFG))
+        self.assertIsNone(src.handoff(dict(route='Review Needed'),e,CFG))
+    def test_startup_owner_and_clarity_fields(self):
+        e=dict(key='startup',channel='C123',ts='100.1')
+        r=dict(route='Startup Program',requested_partnership='Startup credits',
+               requested_action='Provide compute credits',offered_value='Prototype workload <@OTHER>')
+        job=src.handoff(r,e,CFG)
+        self.assertIn('<@'+src.CAMERON+'>',job['text'])
+        self.assertNotIn('<@OTHER>',job['text'])
+        self.assertIn('startup program request',job['text'])
+        manual=src.handoff(r,e,CFG,requested_route=src.VC_ROUTE,requested_by=src.COLBY)
+        self.assertEqual(job['key'],manual['key'])
+        self.assertIn('What they bring:* Prototype workload',job['text'])
