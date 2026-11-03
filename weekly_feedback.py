@@ -129,6 +129,22 @@ def acknowledge(box, event, text, field='ack'):
     box.save_event(event)
 
 
+def acknowledge_capture(box, event):
+    """Confirm both captures on the feedback itself, without a thread reply."""
+    if event['progress'].get('ack_reaction'):
+        return
+    try:
+        box.remote.slack('reactions.add', {
+            'channel': event['channel'], 'timestamp': event['ts'],
+            'name': 'white_check_mark'})
+    except o.Rejected as exc:
+        if str(exc) != 'already_reacted':
+            raise
+    # Retrying an uncertain reaction is safe: Slack permits one per bot/message.
+    event['progress']['ack_reaction'] = 'white_check_mark'
+    box.save_event(event)
+
+
 def process(box, event):
     if not enabled():
         raise RuntimeError('weekly_feedback_paused')  # Preserve accepted work.
@@ -171,10 +187,7 @@ def process(box, event):
         append_capture(box, event, 'draft', event['draft_id'], event['content'])
         event['error'] = ''
         box.save_event(event)
-        acknowledge(box, event, 'Captured your feedback in the outbox record and this week’s draft staging notes.\n'
-                    '<https://app.notion.com/p/' + event['draft_id'].replace('-', '') +
-                    '|View weekly draft in Notion>\n'
-                    'It is pending incorporation into the draft; nothing was republished.')
+        acknowledge_capture(box, event)
     except Exception as exc:
         # Do not persist provider response bodies or credentials in diagnostics.
         event['error'] = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__
