@@ -30,3 +30,14 @@ The Gmail/Claude task owns this workflow; AWS has no direct Gmail authorization.
 Do not infer that changing From through an API inserts the Gmail signature. The connected draft API supports From and body updates, but the configured send-as identity and actual signature still require verification in Gmail. Use the UI if required to select the configured signature. Retain one outbound receipt per source inquiry; do not resend on uncertain outcomes. Respect opt-outs and suppression. Distinguish affiliate/referral links from referral partnership, paid sponsorship, creator requests and technology integration.
 
 Automatic sending is requested, but is not enabled in this release. Before activation: verify send-as access and signature, finalize the standard response, validate saved-draft readback and an authorized test recipient, then configure the Claude task's classification and send-receipt rules. No prospect email is sent by this change.
+
+
+## Automatic specialist handoffs - November 3 implementation (pending deployment)
+
+New successfully reviewed Slack submissions and approved forwards with a recognized supply, event, research/education, Startup Program, VC/incubator or affiliate route are queued automatically, without a score or screening-tier threshold. Individual Startup Program requests go to Cameron in the existing startup/VC channel. Referral partnerships, resellers and ambiguous ownership remain Partnerships review.
+
+Only spam or no usable lead information suppress a recognized specialist handoff. Blockers and existing relationships travel as explicit warnings for the receiving team; they do not suppress internal routing. Low score, DQ tier or missing optional details alone do not prevent handoff. Ambiguous ownership still needs classification before a destination can be selected. This change does not reprocess the historical backlog or enable Gmail intake.
+
+Each handoff states the requested partnership, ask from Runpod, proposed contribution, original score/assessment, qualification notes, specialist next step, original-source link and actual HubSpot link if available, ending with Colby cc. Missing saved request fields are labeled missing rather than invented. Research and affiliate queues have no unverified owner mention.
+
+Existing durable delivery receipts prevent automatic/manual duplicates and hold uncertain sends for reconciliation. Confirmed delivery feeds the existing Notion Actioned/Routed Internally workflow; this completes intake, not the receiving team's work or partner approval.

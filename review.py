@@ -148,7 +148,7 @@ Routes:
 - Influencer/Creator: paid content, creator sponsorship, directory or listing proposals without explicit affiliate-program intent. Do not assume all creators want the affiliate program.
 - Research/University: an institution, lab or researcher asking for compute for research, teaching or
   a cohort with a real workload. A university buying capacity is Sales.
-- Startup Program: startup credits or accelerator asks. Self-serve.
+- Startup Program: individual startup credits or accelerator asks. Route to Cameron for program eligibility and application guidance; do not promise acceptance or credits.
 - Partnerships: reseller, technology/integration, AI/model, co-marketing, VC/PE/incubator, referral,
   SI, consultancy or MSP motions.
 - Product/Eng: technology Runpod would consume, where a specific team would plausibly want it.
@@ -1186,7 +1186,7 @@ def action_buttons(cfg, data, done=()):
         out.append(('draft_gmail', key))
     signals = data.get('signals')
     if cfg.get('routing_enabled') and isinstance(signals, dict) and not any(
-            signals.get(k) for k in ('spam', 'blocker', 'already_in_play')):
+            signals.get(k) for k in ('spam',)):
         for aid in ROUTING_ACTIONS:
             if aid not in done:
                 out.append((aid, key))
@@ -1351,7 +1351,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
             target = ROUTING_ACTIONS[event['action']][0]
             route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
             if route_job is None:
-                clients.ephemeral(event, 'This lead is flagged as spam, blocked or already in play. Resolve that before routing.')
+                clients.ephemeral(event, 'This lead is flagged as spam or has no usable information; nothing was routed.')
                 return
             store.enqueue(route_job)
             existing = store.get(route_job['key'])
@@ -1656,6 +1656,7 @@ def worker():
         delivery = storage.make_outbox(store) if cfg.get('outbox_enabled') else None
         gmail = gmail_intake.Gmail() if cfg.get('gmail_enabled') else None
         next_gmail = 0
+        next_lead_status = 0
         while True:
             if gmail and time.monotonic() >= next_gmail:
                 next_gmail = time.monotonic() + 60
@@ -1663,6 +1664,13 @@ def worker():
                     gmail_intake.poll(store, ledger, gmail, cfg)
                 except Exception:
                     print('Gmail intake failed; checkpoint retained. Check OAuth, label and history access.', flush=True)
+            if cfg['review_enabled'] and time.monotonic() >= next_lead_status:
+                next_lead_status = time.monotonic() + 60
+                try:
+                    import lead_status
+                    lead_status.reconcile(store, ledger)
+                except Exception:
+                    print('Lead status reconciliation pending retry.', flush=True)
             job = store.next_job()
             if not job:
                 if cfg['review_enabled']:

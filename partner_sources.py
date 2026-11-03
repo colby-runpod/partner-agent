@@ -86,6 +86,8 @@ def suggested_review(review):
         return 'Review the affiliate request and choose the appropriate onboarding or program guidance.'
     if route == 'Research/University':
         return 'Review the institution, research or teaching use case, requested compute and timing.'
+    if route == 'Startup Program':
+        return 'Check startup program eligibility and direct the applicant to the right application path.'
     if route == VC_ROUTE:
         return 'Confirm portfolio fit, the requested support and a concrete next step with the fund or program.'
     return review.get('next_step') or 'Confirm the missing details before deciding.'
@@ -100,23 +102,33 @@ def handoff_key(review, event, route):
 
 def handoff(review, event, cfg, requested_route=None, requested_by=None):
     if not cfg.get('routing_enabled'): return None
-    tier = (review.get('screening') or {}).get('tier')
+    if requested_by and requested_by != COLBY: return None
     route = requested_route or review.get('route')
     if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
         route = VC_ROUTE
+    startup_request = route == 'Startup Program'
+    if startup_request:
+        route = VC_ROUTE  # Shared destination/receipt with the manual startup/VC route.
     signals = review.get('signals') or {}
     explicit = requested_by == COLBY and bool(requested_route)
-    if signals.get('spam') or (not explicit and (signals.get('blocker') or signals.get('already_in_play'))): return None
-    if route == 'Supply Team' and (requested_route or tier in ('Act now', 'Qualify')):
+    if signals.get('spam'): return None
+    # Classification alone is not an actionable submission.
+    absent = {'', 'not stated', 'not provided', 'unknown', 'n/a', 'none', 'not captured'}
+    details = [review.get(k) for k in ('company', 'contact', 'email', 'requested_action',
+                                      'offered_value', 'summary', 'dean_motion', 'event_motion')]
+    if not any(str(v or '').strip().casefold() not in absent for v in details):
+        return None
+    if route == 'Supply Team':
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
-    elif route == 'Events/Sponsorship' and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
+    elif route == 'Events/Sponsorship':
         channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
-    elif route == VC_ROUTE and (requested_route or tier in ('Act now', 'Qualify', 'Route')):
-        channel, greeting = VC_CHANNEL, 'Hey <@'+CAMERON+'>-passing along a VC/incubator request.'
+    elif route == VC_ROUTE:
+        channel = VC_CHANNEL
+        greeting = 'Hey <@'+CAMERON+'>-passing along a '+('startup program' if startup_request else 'VC/incubator')+' request.'
     elif route == 'Affiliate Program':
         channel, greeting = AFFILIATE_CHANNEL, 'Affiliate inquiry logged for the incoming owner’s review.'
     elif route == 'Research/University':
-        channel, greeting = RESEARCH_CHANNEL, 'Research/education lead logged for Zoe’s review when she starts.'
+        channel, greeting = RESEARCH_CHANNEL, 'Research/education request for the team’s review.'
     else: return None
     # One specialist handoff per contact/route, including repeated submissions across sources.
     key = handoff_key(review, event, route)
@@ -131,13 +143,21 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
         ('Region',review.get('region')), ('Lead score',score_badge(review)),
         ('Assessment',assessment(review))))
-    text += '\n\n*Request & qualification*\n'+safe(motion or review.get('summary'))
-    text += '\n\n*Suggested review:* '+safe(suggested_review(dict(review, route=route)))
+    text += '\n\n*What they want*'
+    text += '\n• *Partnership requested:* '+safe(review.get('requested_partnership') or review.get('partnership_type') or 'Not specified in the saved review', 400)
+    text += '\n• *Ask from Runpod:* '+safe(review.get('requested_action') or 'Not separately captured; see the original request', 600)
+    text += '\n• *What they bring:* '+safe(review.get('offered_value') or 'Not separately captured; see the original request', 600)
+    text += '\n\n*Assessment notes*\n'+safe(motion or review.get('summary'), 1200)
+    text += '\n\n*Suggested review:* '+safe(suggested_review(dict(review, route='Startup Program' if startup_request else route)))
+    if not explicit:
+        text += '\n_Automatically routed for specialist review. The score is unchanged; this is not approval._'
     if explicit:
         text += '\n\n*Requested handoff:* Colby requested specialist validation despite the original assessment. This is not approval or qualification.'
-        warnings = [str(signals['blocker'])] if signals.get('blocker') else []
-        if signals.get('already_in_play'): warnings.append('An existing relationship or owner may already be involved; coordinate before outreach.')
-        text += '\n*Original warnings:* '+safe('; '.join(warnings) or 'No blocker flagged; original qualification remains unchanged.')
+    warnings = [str(signals['blocker'])] if signals.get('blocker') else []
+    if signals.get('already_in_play'):
+        warnings.append('An existing relationship or owner may already be involved; coordinate before outreach.')
+    if warnings:
+        text += '\n\n*Warnings for the receiving team:* '+safe('; '.join(warnings))
     text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = hubspot_links.source_url(event)

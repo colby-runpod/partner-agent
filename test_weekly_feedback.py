@@ -76,7 +76,9 @@ class WeeklyFeedbackTests(unittest.TestCase):
         content=w.block_text(self.remote.blocks[DRAFT][0])
         self.assertIn(e['text'],content);self.assertIn('Pending incorporation',content)
         replies=[d for m,d in self.remote.calls if m=='chat.postMessage' and 'thread_ts' in d]
-        self.assertEqual(len(replies),1);self.assertEqual(replies[0]['thread_ts'],self.parent)
+        self.assertEqual(replies,[])
+        reactions=[d for m,d in self.remote.calls if m=='reactions.add']
+        self.assertEqual(reactions,[dict(channel=o.WEEKLY_CHANNEL,timestamp=e['ts'],name='white_check_mark')])
     def test_timeout_after_append_is_reconciled_without_duplicate(self):
         self.remote.fail_destination=DRAFT;self.remote.accept_timeout=True
         self.enqueue();self.box.poll();self.assertEqual(self.pending()[0]['progress']['draft'],'writing')
@@ -113,12 +115,36 @@ class WeeklyFeedbackTests(unittest.TestCase):
         self.enqueue();self.remote.duplicate=True;self.box.poll();self.assertEqual(self.pending(),[])
         self.remote.pages[DRAFT]['parent']['data_source_id']=o.SOURCE
         self.enqueue(ts='1793133459.6');self.box.poll();self.assertEqual(self.remote.append_count[DRAFT],1)
-    def test_ack_timeout_does_not_repost_on_restart(self):
-        self.enqueue();self.remote.fail=[TimeoutError()];self.box.poll();self.box.poll()
-        replies=[d for m,d in self.remote.calls if m=='chat.postMessage' and 'thread_ts' in d]
-        self.assertEqual(len(replies),1)
-        self.assertEqual(sum('Captured your feedback' in d['text'] for d in replies),1)
+    def test_reaction_timeout_retries_without_duplicate_capture_or_reply(self):
+        self.enqueue()
+        original=self.remote.slack
+        outcomes=[TimeoutError(),o.Rejected('already_reacted')]
+        def slack(method,data):
+            if method=='reactions.add' and outcomes:
+                self.assertEqual(self.remote.append_count,{self.p['id']:1,DRAFT:1})
+                raise outcomes.pop(0)
+            return original(method,data)
+        with patch.object(self.remote,'slack',side_effect=slack):
+            self.box.poll()
+            self.assertEqual(len(self.pending()),1)
+            o.Outbox(self.box.path,self.remote).poll()
+        self.assertEqual(self.pending(),[])
         self.assertEqual(self.remote.append_count[DRAFT],1)
+        self.assertFalse(any(m=='chat.postMessage' and 'thread_ts' in d for m,d in self.remote.calls))
+    def test_incomplete_capture_has_no_success_reaction(self):
+        self.remote.fail_destination=DRAFT
+        self.enqueue();self.box.poll()
+        self.assertFalse(any(m=='reactions.add' for m,d in self.remote.calls))
+    def test_reaction_permission_failure_remains_pending(self):
+        self.enqueue()
+        original=self.remote.slack
+        def slack(method,data):
+            if method=='reactions.add':raise o.Rejected('missing_scope')
+            return original(method,data)
+        with patch.object(self.remote,'slack',side_effect=slack):self.box.poll()
+        self.assertNotIn('ack_reaction',self.pending()[0]['progress'])
+        self.box.poll()
+        self.assertEqual(self.pending(),[])
     def test_attachment_reference_and_long_text(self):
         self.enqueue(files=[{'id':'F1'}]);self.box.poll()
         self.assertIn('Attachments were not captured',w.block_text(self.remote.blocks[DRAFT][0]))

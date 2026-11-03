@@ -92,7 +92,12 @@ def process(store,job,clients,ledger,cfg,notion):
         store.update(key,ref=json.dumps(dict(notion_id=page_id,status=status,routes=routes)),result_url=url)
         marked=True
         for ts in dict.fromkeys(filter(None,(source_ts,row.get('card_ts')))):
-            marked=question_progress.change(dict(progress=True,channel=row['channel'],ts=ts),'add','white_check_mark') and marked
+            event=dict(progress=True,channel=row['channel'],ts=ts)
+            added=question_progress.change(event,'add','white_check_mark')
+            if added:
+                question_progress.change(event,'remove','clock3')
+                question_progress.change(event,'remove','double_vertical_bar')
+            marked=added and marked
         store.update(key,state='done',error='' if marked else 'completion_reaction_unconfirmed')
     except Exception:
         store.update(key,state='done',error='completion_reconciliation_required')

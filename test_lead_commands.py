@@ -65,7 +65,7 @@ class Commands(unittest.TestCase):
             self.assertIn('Already forwarded',client.acks[-1])
 
     def test_automatic_and_spam_stay_gated(self):
-        self.assertIsNone(routes.handoff(DATA,DATA['source_event'],CFG,requested_route='Supply Team'))
+        self.assertIsNotNone(routes.handoff(DATA,DATA['source_event'],CFG,requested_route='Supply Team'))
         self.assertIsNone(routes.handoff(dict(DATA,signals={'spam':True}),DATA['source_event'],CFG,requested_route='Supply Team',requested_by=routes.COLBY))
         self.assertIsNone(routes.handoff(DATA,DATA['source_event'],CFG,requested_route='Supply Team',requested_by='OTHER'))
 

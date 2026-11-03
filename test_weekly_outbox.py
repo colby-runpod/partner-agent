@@ -64,3 +64,24 @@ class WeeklyOutbox(unittest.TestCase):
         body=dict(team_id='T1',api_app_id='A1',event_id='E1',event=dict(type='message',user='U1',channel=o.WEEKLY_CHANNEL,ts='2.1',thread_ts='1.1'))
         with patch.object(o,'owns') as owns:
             self.assertIsNone(o.accept(body,cfg));owns.assert_not_called()
+
+    def test_long_weekly_draft_has_single_parent_with_verbatim_blocks(self):
+        body=('Line with <https://example.com|evidence>\n'*150)
+        p=weekly(Body=body);b=self.box([p]);b.poll()
+        self.assertEqual(len(self.posts()),1)
+        sent=self.posts()[0]
+        self.assertLess(len(sent['text']),3500)
+        self.assertEqual(''.join(x['text']['text'] for x in sent['blocks']),body)
+        self.assertTrue(all(x['text']['verbatim'] for x in sent['blocks']))
+        self.assertNotIn('thread_ts',sent)
+
+    def test_reconciled_split_post_alias_keeps_same_delivery(self):
+        import json
+        p=weekly();b=self.box([p]);b.poll()
+        with b.db() as db:
+            row=db.execute('SELECT snapshot FROM outbox_delivery WHERE id=?',(p['id'],)).fetchone()
+            snapshot=json.loads(row[0]);snapshot['message_ts_aliases']=['700.1','700.2']
+            db.execute('UPDATE outbox_delivery SET snapshot=? WHERE id=?',(json.dumps(snapshot),p['id']))
+        self.assertEqual(b.matches('700.1')[0]['id'],p['id'])
+        self.assertEqual(b.matches('700.2')[0]['id'],p['id'])
+        self.assertEqual(b.matches('999.1'),[])

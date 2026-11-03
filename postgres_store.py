@@ -105,10 +105,7 @@ class PostgresStore:
                 (self.namespace,event['key'],json.dumps(event))).rowcount == 1
 
     def owns(self, channel, ts):
-        with self.connect() as db:
-            rows=db.execute('SELECT snapshot FROM partner_agent.outbox_delivery WHERE namespace=%s AND ts=%s',
-                            (self.namespace,ts)).fetchall()
-            return any(json.loads(r['snapshot'])['channel']==channel for r in rows)
+        return any(json.loads(r['snapshot'])['channel']==channel for r in self.matching_deliveries(ts))
 
     def save_delivery(self, row_id, **fields):
         if not fields or not fields.keys() <= {'state','ts','decision','actor','at','error'}:
@@ -123,7 +120,7 @@ class PostgresStore:
 
     def matching_deliveries(self, ts):
         with self.connect() as db:
-            return db.execute('SELECT * FROM partner_agent.outbox_delivery WHERE namespace=%s AND ts=%s',(self.namespace,ts)).fetchall()
+            return db.execute("SELECT * FROM partner_agent.outbox_delivery WHERE namespace=%s AND (ts=%s OR snapshot::jsonb->'message_ts_aliases' ? %s)",(self.namespace,ts,ts)).fetchall()
 
     def pending_events(self):
         with self.connect() as db:
