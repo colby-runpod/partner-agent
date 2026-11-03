@@ -1186,7 +1186,7 @@ def action_buttons(cfg, data, done=()):
         out.append(('draft_gmail', key))
     signals = data.get('signals')
     if cfg.get('routing_enabled') and isinstance(signals, dict) and not any(
-            signals.get(k) for k in ('spam', 'blocker', 'already_in_play')):
+            signals.get(k) for k in ('spam',)):
         for aid in ROUTING_ACTIONS:
             if aid not in done:
                 out.append((aid, key))
@@ -1351,7 +1351,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
             target = ROUTING_ACTIONS[event['action']][0]
             route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
             if route_job is None:
-                clients.ephemeral(event, 'This lead is flagged as spam, blocked or already in play. Resolve that before routing.')
+                clients.ephemeral(event, 'This lead is flagged as spam or has no usable information; nothing was routed.')
                 return
             store.enqueue(route_job)
             existing = store.get(route_job['key'])

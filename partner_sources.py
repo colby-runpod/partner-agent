@@ -102,6 +102,7 @@ def handoff_key(review, event, route):
 
 def handoff(review, event, cfg, requested_route=None, requested_by=None):
     if not cfg.get('routing_enabled'): return None
+    if requested_by and requested_by != COLBY: return None
     route = requested_route or review.get('route')
     if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
         route = VC_ROUTE
@@ -110,7 +111,13 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         route = VC_ROUTE  # Shared destination/receipt with the manual startup/VC route.
     signals = review.get('signals') or {}
     explicit = requested_by == COLBY and bool(requested_route)
-    if signals.get('spam') or (not explicit and (signals.get('blocker') or signals.get('already_in_play'))): return None
+    if signals.get('spam'): return None
+    # Classification alone is not an actionable submission.
+    absent = {'', 'not stated', 'not provided', 'unknown', 'n/a', 'none', 'not captured'}
+    details = [review.get(k) for k in ('company', 'contact', 'email', 'requested_action',
+                                      'offered_value', 'summary', 'dean_motion', 'event_motion')]
+    if not any(str(v or '').strip().casefold() not in absent for v in details):
+        return None
     if route == 'Supply Team':
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
     elif route == 'Events/Sponsorship':
@@ -146,9 +153,11 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         text += '\n_Automatically routed for specialist review. The score is unchanged; this is not approval._'
     if explicit:
         text += '\n\n*Requested handoff:* Colby requested specialist validation despite the original assessment. This is not approval or qualification.'
-        warnings = [str(signals['blocker'])] if signals.get('blocker') else []
-        if signals.get('already_in_play'): warnings.append('An existing relationship or owner may already be involved; coordinate before outreach.')
-        text += '\n*Original warnings:* '+safe('; '.join(warnings) or 'No blocker flagged; original qualification remains unchanged.')
+    warnings = [str(signals['blocker'])] if signals.get('blocker') else []
+    if signals.get('already_in_play'):
+        warnings.append('An existing relationship or owner may already be involved; coordinate before outreach.')
+    if warnings:
+        text += '\n\n*Warnings for the receiving team:* '+safe('; '.join(warnings))
     text += '\n\n*Links*\n• <%s|Original request>' % source
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = hubspot_links.source_url(event)

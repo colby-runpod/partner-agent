@@ -36,7 +36,7 @@ Automatic sending is requested, but is not enabled in this release. Before activ
 
 New successfully reviewed Slack submissions and approved forwards with a recognized supply, event, research/education, Startup Program, VC/incubator or affiliate route are queued automatically, without a score or screening-tier threshold. Individual Startup Program requests go to Cameron in the existing startup/VC channel. Referral partnerships, resellers and ambiguous ownership remain Partnerships review.
 
-Spam, an existing active relationship, or a flagged blocker still suppress automatic handoff. The current blocker field includes both compliance risks and decisive unverified claims; those exceptions still need explicit human routing. Low score, DQ tier or missing optional details alone do not prevent handoff. This change does not reprocess the historical backlog or enable Gmail intake.
+Only spam or no usable lead information suppress a recognized specialist handoff. Blockers and existing relationships travel as explicit warnings for the receiving team; they do not suppress internal routing. Low score, DQ tier or missing optional details alone do not prevent handoff. Ambiguous ownership still needs classification before a destination can be selected. This change does not reprocess the historical backlog or enable Gmail intake.
 
 Each handoff states the requested partnership, ask from Runpod, proposed contribution, original score/assessment, qualification notes, specialist next step, original-source link and actual HubSpot link if available, ending with Colby cc. Missing saved request fields are labeled missing rather than invented. Research and affiliate queues have no unverified owner mention.
 

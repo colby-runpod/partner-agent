@@ -61,8 +61,8 @@ class Sources(unittest.TestCase):
         self.assertEqual(a['key'],b['key'])
         for tier in ('DQ','Hold for Colby','Needs research','Route'):
             self.assertIsNotNone(src.handoff(dict(r,screening={'tier':tier}),e,CFG))
-        self.assertIsNone(src.handoff(dict(r,signals={'blocker':'risk'}),e,CFG))
-        self.assertIsNone(src.handoff(dict(r,signals={'already_in_play':True}),e,CFG))
+        self.assertIsNotNone(src.handoff(dict(r,signals={'blocker':'risk'}),e,CFG))
+        self.assertIsNotNone(src.handoff(dict(r,signals={'already_in_play':True}),e,CFG))
         self.assertEqual(src.handoff(dict(r,route='Research/University'),e,CFG)['channel'],src.RESEARCH_CHANNEL)
         ev=src.handoff(dict(r,route='Events/Sponsorship',screening={'tier':'Route'}),e,CFG)
         self.assertIn('<@U0AB1TSBK5X>',ev['text']);self.assertIn('<@U0APRAUGJ6P>',ev['text'])
@@ -93,7 +93,7 @@ class Sources(unittest.TestCase):
 class CardLayout(unittest.TestCase):
     def test_score_and_assessment_follow_region(self):
         for route in ('Supply Team', 'Events/Sponsorship'):
-            r=dict(route=route,screening={'tier':'Qualify'},score=2,decision='triage',region='US',signals={})
+            r=dict(company='Example',route=route,screening={'tier':'Qualify'},score=2,decision='triage',region='US',signals={})
             text=src.handoff(r,dict(key='k',channel='C123',ts='100.1'),CFG)['text']
             self.assertIn('• *Region:* US\n• *Lead score:* 2️⃣ 2/5\n• *Assessment:* 🟡 Needs triage',text)
             self.assertIn('*Suggested review:* Confirm',text)
@@ -154,7 +154,7 @@ class RoutingActions(unittest.TestCase):
 
     def test_only_colby_and_no_spam_blocked_or_in_play(self):
         self.act(user='UOTHER'); self.client.send_handoff.assert_not_called()
-        for i,signal in enumerate(('spam','blocker','already_in_play')):
+        for i,signal in enumerate(('spam',)):
             self.data['signals']={signal:True}; self.save(); self.act(ts='400.'+str(i))
         self.client.send_handoff.assert_not_called()
 
@@ -210,7 +210,7 @@ class VCRouting(RoutingActions):
         self.assertIsNotNone(src.handoff(data,self.event,self.cfg))
         self.assertIsNone(src.handoff(dict(data,partnership_type='Reseller/VAR'),self.event,self.cfg))
         self.assertIsNotNone(src.handoff(dict(data,screening={'tier':'Hold for Colby'}),self.event,self.cfg))
-        for signal in ('spam','blocker','already_in_play'):
+        for signal in ('spam',):
             self.assertIsNone(src.handoff(dict(data,signals={signal:True}),self.event,self.cfg,requested_route=src.VC_ROUTE))
         self.assertIsNone(src.handoff(data,self.event,dict(self.cfg,routing_enabled=False)))
 
@@ -264,7 +264,7 @@ class AutomaticSpecialistRouting(unittest.TestCase):
                 self.assertEqual(job['channel'],channel)
                 self.assertIn('Automatically routed',job['text'])
                 self.assertIn('Ask from Runpod:* Review our request',job['text'])
-                for flag in ('spam','blocker','already_in_play'):
+                for flag in ('spam',):
                     self.assertIsNone(src.handoff(dict(r,signals={flag:True}),e,CFG))
         self.assertIsNone(src.handoff(dict(route='Review Needed'),e,CFG))
     def test_startup_owner_and_clarity_fields(self):
@@ -278,3 +278,16 @@ class AutomaticSpecialistRouting(unittest.TestCase):
         manual=src.handoff(r,e,CFG,requested_route=src.VC_ROUTE,requested_by=src.COLBY)
         self.assertEqual(job['key'],manual['key'])
         self.assertIn('What they bring:* Prototype workload',job['text'])
+
+class RoutingExceptions(unittest.TestCase):
+    def test_blockers_and_existing_relationship_are_forwarded_with_warnings(self):
+        e=dict(key='k',channel='C123',ts='100.1')
+        r=dict(company='Example',route='Supply Team',score=1,
+               signals={'blocker':'Identity unverified','already_in_play':True})
+        job=src.handoff(r,e,CFG)
+        self.assertIn('Identity unverified',job['text'])
+        self.assertIn('coordinate before outreach',job['text'])
+        self.assertEqual(job['channel'],'C0CAL8C08RK')
+    def test_no_information_does_not_route(self):
+        e=dict(key='k',channel='C123',ts='100.1')
+        self.assertIsNone(src.handoff(dict(route='Supply Team',company='Not stated',summary='Not provided'),e,CFG))
