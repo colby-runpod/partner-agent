@@ -1535,16 +1535,28 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
             for kind in ('actioned', 'needs_action', 'parked')))
         lines.append('_Actioned means intake handled; it does not imply partner approval or receiving-team follow-up._')
         order = ['pursue', 'triage', 'redirect', 'do_not_pursue']
-        for r in sorted(ok, key=lambda r: (order.index(r['decision']) if r['decision'] in order else 9, r['created']))[:25]:
-            label = _link(clients, r['channel'], r['ts'], r['company'] or 'submission')
-            lines.append('%s %s  ·  %s%s%s' % (DECISIONS.get(r['decision'], '').split(' ')[0], label, partner_sources.score_badge(r)+'  ·  '+r['route'],
-                                                ('  ·  ' + r['headline']) if r['headline'] else '',
-                                                '  ·  parked' if r.get('parked_by') else
-                                                '  ·  in Notion' if r.get('notion_url') else ''))
+        group_order = {'needs_action': 0, 'actioned': 1, 'parked': 2}
+        headings = {'needs_action': ':hourglass_flowing_sand: NEEDS YOUR DECISION',
+                    'actioned': ':white_check_mark: ACTIONED / HANDED OFF', 'parked': ':parking: PARKED'}
+        previous = None
+        for r in sorted(ok, key=lambda r: (group_order[actions[r['key']][0]],
+                        order.index(r['decision']) if r['decision'] in order else 9, r['created'])):
+            status, status_text = actions[r['key']]
+            if status != previous:
+                lines += ['', '*%s · %d*' % (headings[status], sum(v[0] == status for v in actions.values()))]
+                previous = status
+            label = _link(clients, r['channel'], r.get('card_ts') or r['ts'], r['company'] or 'submission')
             data = json.loads(r.get('data') or '{}')
-            lines.append('  '+actions[r['key']][1])
-            if data.get('next_step') and actions[r['key']][0] == 'needs_action':
-                lines.append('  Next: '+_clean(data['next_step'],180))
+            requested = data.get('requested_partnership') or data.get('partnership_type') or 'Not captured'
+            ask = data.get('requested_action') or r.get('headline') or 'See original submission'
+            lines += ['', '*'+label+'*', '• *Partnership:* '+_clean(requested, 400),
+                      '• *Request:* '+_clean(ask, 400),
+                      '• *Score / assessment:* '+partner_sources.score_badge(r)+' · '+DECISIONS.get(r['decision'], r['decision']),
+                      '• *Status:* '+status_text]
+            if status == 'needs_action':
+                lines.append('• *Next step:* '+_clean(data.get('next_step') or 'Review the submission and choose an action.', 400))
+            elif status == 'parked':
+                lines.append('• *Context:* '+_clean(r.get('headline') or 'Deferred; see the review for context.', 180))
             if store and data:
                 for destination, owner in (('Supply Team','Dean'),('Events/Sponsorship','Adriana and Carmela'),
                                            (partner_sources.VC_ROUTE,'Cameron'),('Research/University','research/education backlog'),
@@ -1561,12 +1573,10 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
                             lines.append('  Handoff to %s: queued, not yet delivered.' % owner)
                         else:
                             lines.append('  Handoff to %s: unconfirmed; needs reconciliation.' % owner)
-        if len(ok) > 25:
-            lines.append('Plus %d additional reviewed submissions; see the source channels.' % (len(ok)-25))
         problems = [r for r in rows if r['outcome'] != 'ok' or r['delivered'] == 'unconfirmed']
         if problems:
             lines += ['', '*Needs attention*']
-            for r in problems[:15]:
+            for r in problems:
                 what = 'review failed' if r['outcome'] != 'ok' else 'card may not have posted'
                 lines.append('• %s: %s' % (_link(clients, r['channel'], r['ts'], r['company'] or 'submission'), what))
     if cfg['key_expires']:
@@ -1575,6 +1585,25 @@ def build_summary(cfg, rows, clients, now_utc, store=None):
             lines += ['', ':key: The Anthropic API key %s. Update the Anthropic secret in AWS before then.'
                       % ('expired %d days ago' % -days if days < 0 else 'expires in %d days' % days)]
     return '\n'.join(lines)
+
+
+def summary_parts(text, limit=3500):
+    """Keep complete lead paragraphs together; never truncate the reporting window."""
+    parts, current = [], ''
+    for paragraph in text.split('\n\n'):
+        if len(paragraph) > limit:
+            raise ValueError('Recap entry too long; shorten fields before delivery')
+        candidate = current+'\n\n'+paragraph if current else paragraph
+        if len(candidate) > limit:
+            parts.append(current)
+            current = paragraph
+        else:
+            current = candidate
+    if current:
+        parts.append(current)
+    if len(parts) > 1:
+        parts = ['*Lead recap · part %d/%d*\n%s' % (i+1, len(parts), part) for i, part in enumerate(parts)]
+    return parts
 
 
 def run_summary(cfg, ledger, clients, now_utc=None, store=None):
@@ -1591,20 +1620,24 @@ def run_summary(cfg, ledger, clients, now_utc=None, store=None):
     rows = [r for r in ledger.since(start) if r['created'] < end]
     text = build_summary(cfg, rows, clients, now_utc, store=store)
     pending = dict(date=local.strftime('%Y-%m-%d'), start=start, end=end,
-                   channel=cfg['summary_channel'], text=text, status='sending')
+                   channel=cfg['summary_channel'], text=text, parts=summary_parts(text), receipts=[], status='sending')
     state['pending'] = pending
     ledger.put('daily_summary_state', json.dumps(state))  # Commit intent before Slack; never retry blindly.
     try:
-        receipt = clients.say(pending['channel'], text)
-        if not receipt or not re.fullmatch(r'\d+\.\d+', receipt):
-            raise ValueError('Missing Slack receipt')
+        for part in pending['parts']:
+            receipt = clients.say(pending['channel'], part)
+            if not receipt or not re.fullmatch(r'\d+\.\d+', receipt):
+                raise ValueError('Missing Slack receipt')
+            pending['receipts'].append(receipt)
+            ledger.put('daily_summary_state', json.dumps(state))
     except Exception:
         pending['status'] = 'unconfirmed'
         ledger.put('daily_summary_state', json.dumps(state))
         print('Daily summary delivery unconfirmed; reporting window retained for reconciliation.', flush=True)
         return True
     state.update(through=end, last_date=pending['date'], pending=None,
-                 receipt=dict(channel=pending['channel'], ts=receipt, start=start, end=end))
+                 receipt=dict(channel=pending['channel'], ts=pending['receipts'][0],
+                              parts=pending['receipts'], start=start, end=end))
     ledger.put('daily_summary_state', json.dumps(state))
     return True
 

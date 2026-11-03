@@ -592,7 +592,9 @@ class LedgerSummaryTests(unittest.TestCase):
                                     review.dt.datetime(2026, 10, 23, 23, 30))
         self.assertIn('*Partner submissions · Fri Oct 23*', text)
         self.assertIn('1 reviewed: :large_green_circle: Pursue 1', text)
-        self.assertIn(':large_green_circle: <https://slack.example/CSUB/50.1|Example Inc>  ·  4️⃣ 4/5  ·  Partnerships  ·  Invite once approved', text)
+        self.assertIn('*<https://slack.example/CSUB/50.1|Example Inc>*', text)
+        self.assertIn('*Score / assessment:* 4️⃣ 4/5 · :large_green_circle: Pursue', text)
+        self.assertIn('*Next step:* Invite to apply once you approve', text)
         self.assertIn('*Needs attention*', text); self.assertIn('review failed', text)
         self.assertIn('expires in 14 days', text)
         self.assertNotIn('expires', review.build_summary(dict(CFG, key_expires='2026-12-31'), [], FakeSay(),

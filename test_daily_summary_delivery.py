@@ -91,7 +91,8 @@ class DailySummaryDelivery(unittest.TestCase):
             self.ledger.record(str(i),dict(channel='C1',ts=str(i)+'.1',thread_ts=str(i)+'.1'),data,'ok',now=i+1)
         text=review.build_summary(CFG,self.ledger.since(0),self.client,self.now)
         self.assertIn('0 actioned · 27 needs action · 0 parked',text)
-        self.assertIn('Plus 2 additional',text)
+        self.assertEqual(text.count('|Example Inc>'),27)
+        self.assertNotIn('Plus 2 additional',text)
 
     def test_persisted_completion_counted_even_when_slack_marker_failed(self):
         from intake import Store
@@ -106,3 +107,35 @@ class DailySummaryDelivery(unittest.TestCase):
         self.assertIn('1 actioned · 0 needs action · 0 parked',text)
         self.assertIn('Actioned in Notion',text)
         self.assertNotIn('  Next:',text)
+
+    def test_parts_keep_all_content_and_fence_partial_failure(self):
+        text='Header\n\n'+'\n\n'.join('Lead '+str(i)+' '+('x'*900) for i in range(8))
+        parts=review.summary_parts(text)
+        self.assertGreater(len(parts),1)
+        self.assertTrue(all(len(p)<3600 for p in parts))
+        for i in range(8):self.assertEqual(sum(p.count('Lead '+str(i)+' ') for p in parts),1)
+        from unittest.mock import patch
+        self.client.say=Mock(side_effect=['100.1',TimeoutError()])
+        with patch.object(review,'build_summary',return_value=text):
+            review.run_summary(CFG,self.ledger,self.client,self.now)
+        state=review.summary_state(self.ledger)
+        self.assertEqual(state['pending']['receipts'],['100.1'])
+        self.assertEqual(state['pending']['status'],'unconfirmed')
+        self.assertNotIn('through',state)
+        self.assertFalse(review.run_summary(CFG,self.ledger,self.client,self.now))
+        self.assertEqual(self.client.say.call_count,2)
+
+    def test_grouping_puts_action_needed_before_completed_and_parked(self):
+        for key in ('done','waiting','parked'):
+            self.ledger.record(key,dict(channel='C1',ts=key,thread_ts=key),review.parse(json.dumps(GOOD)),'ok',now=1)
+        rows=self.ledger.since(0)
+        for r in rows:
+            r['company']=r['key']
+            if r['key']=='parked':r['parked_by']='colby'
+        store=Mock();store.get.return_value=None
+        store.completion_receipts.return_value=[dict(payload=json.dumps(dict(channel='C1',review_key='done')),
+            ref=json.dumps(dict(notion_id='page',status='Actioned')),result_url='https://notion.so/page')]
+        text=review.build_summary(CFG,rows,self.client,self.now,store)
+        self.assertLess(text.index('NEEDS YOUR DECISION'),text.index('ACTIONED / HANDED OFF'))
+        self.assertLess(text.index('ACTIONED / HANDED OFF'),text.index('PARKED'))
+        self.assertIn('1 actioned · 1 needs action · 1 parked',text)
