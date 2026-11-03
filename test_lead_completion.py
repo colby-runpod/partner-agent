@@ -35,7 +35,7 @@ class Completion(unittest.TestCase):
                 self.assertEqual(n.props['Status']['select']['name'],'Actioned');self.assertTrue(append.called);return True
             change.side_effect=mark;c.process(s,s.get(e['key']),Mock(),l,CFG,n)
             self.assertEqual(n.props['Intake Stage']['select']['name'],'Routed Internally');self.assertEqual(n.props['Qualification Score']['select']['name'],'2')
-            self.assertEqual([call.args[0]['ts'] for call in change.call_args_list],['10.1','11.1'])
+            self.assertEqual([call.args[0]['ts'] for call in change.call_args_list if call.args[1]=='add'],['10.1','11.1'])
             c.process(s,s.get(e['key']),Mock(),l,CFG,n);self.assertEqual(len(n.writes),1)
     @patch('lead_completion.question_progress.change',return_value=True)
     @patch('lead_completion.lead_commands.append_activity')

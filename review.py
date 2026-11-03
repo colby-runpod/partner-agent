@@ -1656,6 +1656,7 @@ def worker():
         delivery = storage.make_outbox(store) if cfg.get('outbox_enabled') else None
         gmail = gmail_intake.Gmail() if cfg.get('gmail_enabled') else None
         next_gmail = 0
+        next_lead_status = 0
         while True:
             if gmail and time.monotonic() >= next_gmail:
                 next_gmail = time.monotonic() + 60
@@ -1663,6 +1664,13 @@ def worker():
                     gmail_intake.poll(store, ledger, gmail, cfg)
                 except Exception:
                     print('Gmail intake failed; checkpoint retained. Check OAuth, label and history access.', flush=True)
+            if cfg['review_enabled'] and time.monotonic() >= next_lead_status:
+                next_lead_status = time.monotonic() + 60
+                try:
+                    import lead_status
+                    lead_status.reconcile(store, ledger)
+                except Exception:
+                    print('Lead status reconciliation pending retry.', flush=True)
             job = store.next_job()
             if not job:
                 if cfg['review_enabled']:

@@ -95,6 +95,21 @@ def payload(r):
              client_msg_id=str(uuid.uuid5(uuid.NAMESPACE_URL, 'partner-outbox:'+r['id'])))
     if r['channel'] in (WEEKLY_CHANNEL, SIGNAL_CHANNEL):
         p.update(parse='none',link_names=False)
+    if r['channel'] == WEEKLY_CHANNEL and len(text) > 3500:
+        # Slack can split long plain text into separate top-level messages and return
+        # only the final timestamp. Keep one feedback parent with section blocks.
+        chunks, current = [], ''
+        for line in text.splitlines(keepends=True):
+            if len(line) > 2800:
+                raise ValueError('Weekly draft line too long; shorten the line before posting')
+            if current and len(current)+len(line) > 2800:
+                chunks.append(current)
+                current = ''
+            current += line
+        if current:
+            chunks.append(current)
+        p['text'] = 'Weekly Partnerships Update draft · '+r['title'].split(':',1)[1]+' · Full draft below.'
+        p['blocks'] = [{'type':'section','text':{'type':'mrkdwn','text':chunk,'verbatim':True}} for chunk in chunks]
     if r['thread']:
         p['thread_ts'] = r['thread']
     if r['kind'] == 'invitation_queue' and r['related']:
@@ -238,7 +253,8 @@ class Outbox:
     def matches(self,ts):
         if self.storage is not None: return self.storage.matching_deliveries(ts)
         with self.db() as db:
-            return [dict(x) for x in db.execute('SELECT * FROM outbox_delivery WHERE ts=?',(ts,))]
+            return [dict(x) for x in db.execute('SELECT * FROM outbox_delivery')
+                    if x['ts']==ts or ts in json.loads(x['snapshot']).get('message_ts_aliases',[])]
     def decide(self,id,decision,actor):
         if self.storage is not None: return self.storage.decide(id,decision,actor,now())
         with self.db() as db:
@@ -396,7 +412,8 @@ def owns(channel,ts):
     path = os.environ.get('CHAT_DB', '/data/chat.sqlite3')
     try:
         with sqlite3.connect('file:'+path+'?mode=ro', uri=True, timeout=2) as db:
-            return any(json.loads(x[0])['channel']==channel for x in db.execute('SELECT snapshot FROM outbox_delivery WHERE ts=?',(ts,)))
+            return any(json.loads(x[0])['channel']==channel and (x[1]==ts or ts in json.loads(x[0]).get('message_ts_aliases',[]))
+                       for x in db.execute('SELECT snapshot,ts FROM outbox_delivery'))
     except sqlite3.Error:
         return False
 
