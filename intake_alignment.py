@@ -310,7 +310,15 @@ review. Last validated owners survive a temporary Notion outage in this process.
             raise ValueError('Guide exceeds bound')
         def plain(xs): return ''.join(x.get('plain_text') or x.get('text',{}).get('content','') for x in xs)
         root=blocks('40fff732-fc34-810e-ac53-f085a6d47576')
-        text='\n'.join(plain(b.get(b['type'],{}).get('rich_text',[])) for b in root)
+        def text_content(items, depth=0):
+            if depth>12: raise ValueError('Guide nesting exceeds bound')
+            result=[]
+            for block in items:
+                result.append(plain(block.get(block['type'],{}).get('rich_text',[])))
+                if block.get('has_children') and block['type'] not in ('table','child_page','child_database'):
+                    result.extend(text_content(blocks(block['id']),depth+1))
+            return result
+        text='\n'.join(text_content(root))
         version=re.search(r'Guide version:\s*(\d{4}-\d{2}-\d{2}\.\d+)',text)
         if not version: raise ValueError('Guide version missing')
         if version[1] != GUIDE_VERSION:

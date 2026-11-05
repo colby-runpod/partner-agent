@@ -216,22 +216,25 @@ class Contract(unittest.TestCase):
               {'type':'paragraph','paragraph':{'rich_text':rich('Never send email')}},
               {'type':'heading_2','heading_2':{'rich_text':rich('5. Routing rules')}},
               {'id':'routes','type':'table'}]
+        version_block=root[0]
+        root[0]={'id':'metadata-callout','type':'callout','callout':{'rich_text':rich('Source of truth')},'has_children':True}
         owners={k:v for k,v in a.ROUTES.items()}
         def request(method,path,data=None):
             if '/40fff732-fc34-810e-ac53-f085a6d47576/' in path: return {'results':root}
             if '/40fff732-fc34-80f9-b488-cfafd7a7b257/' in path: return {'results':[]}
+            if '/metadata-callout/' in path: return {'results':[version_block]}
             if '/routes/' in path:
                 return {'results':[{'type':'table_row','table_row':{'cells':[rich(k),rich(''),rich(c),rich(' '.join(us))]}} for k,(c,us) in owners.items()]}
             raise AssertionError(path)
         with patch.object(a,'_GUIDE_CHECKED',0),patch.object(a,'_GUIDE_CACHE',None),patch.object(a,'GUIDE_VERSION','2026-11-05.2'),patch.dict(a.ROUTES),patch.dict(a._GUIDE_STATE),patch.object(a,'audit'):
             a.refresh_guide(request)
             self.assertFalse(a._GUIDE_STATE['degraded'])
-            root[0]['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
+            version_block['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
             owners['Affiliate Program']=('C0CD3M1QG4U',('U0123456789',))
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
             self.assertEqual(a.GUIDE_VERSION,'2026-11-05.3')
             self.assertEqual(a.ROUTES['Affiliate Program'][1],('U0123456789',))
-            root[0]['paragraph']['rich_text']=rich('Guide version: 2026-11-05.4 Last reviewed: 2026-11-05')
+            version_block['paragraph']['rich_text']=rich('Guide version: 2026-11-05.4 Last reviewed: 2026-11-05')
             root[2]['paragraph']['rich_text']=rich('Send email automatically')
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
             self.assertTrue(a._GUIDE_STATE['blocked'])
