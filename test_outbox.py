@@ -83,6 +83,13 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(args[1],'chat.getPermalink?channel=C1&message_ts=123.456')
         self.assertEqual(args[2:4],('GET',None))
 
+    def test_slack_read_methods_use_query_parameters(self):
+        for method in ('users.info','conversations.members','conversations.history','conversations.replies','conversations.info'):
+            with self.subTest(method=method), patch.dict(os.environ,SLACK_BOT_TOKEN='test'), patch.object(o.Remote,'call',return_value={}) as call:
+                o.Remote().slack(method,{'channel':'C1','cursor':'a+b='})
+                self.assertEqual(call.call_args.args[1],method+'?channel=C1&cursor=a%2Bb%3D')
+                self.assertEqual(call.call_args.args[2:4],('GET',None))
+
     def test_development_update_posts_once(self):
         p = page(kind='other', channel='C0C7R970C5T')
         box = self.setup_box([p]); box.poll(); box.poll()
