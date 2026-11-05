@@ -1,11 +1,16 @@
 import io
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 from scripts import deploy_aws_standby as deploy
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_active_runtime_modules_are_copied_into_image(self):
+        dockerfile = Path(__file__).with_name('Dockerfile').read_text()
+        self.assertIn('review.py working_task_brief.py tasks.py', dockerfile)
+
     def exercise(self, health, secrets=None):
         image = 'example@sha256:abc'
         task = {'containerDefinitions': [{
