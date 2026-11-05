@@ -221,7 +221,9 @@ class Contract(unittest.TestCase):
         owners={k:v for k,v in a.ROUTES.items()}
         def request(method,path,data=None):
             if '/40fff732-fc34-810e-ac53-f085a6d47576/' in path: return {'results':root}
-            if '/40fff732-fc34-80f9-b488-cfafd7a7b257/' in path: return {'results':[]}
+            if '/40fff732-fc34-80f9-b488-cfafd7a7b257/' in path: return {'results':[{'id':'library','type':'callout','has_children':True}]}
+            if '/library/' in path: return {'results':[{'id':'40fff732fc348187b3cbf23755ad4ea5','type':'child_page'}]}
+            if '/40fff732fc348187b3cbf23755ad4ea5/' in path: return {'results':[]}
             if '/metadata-callout/' in path: return {'results':[version_block]}
             if '/routes/' in path:
                 return {'results':[{'type':'table_row','table_row':{'cells':[rich(k),rich(''),rich(c),rich(' '.join(us))]}} for k,(c,us) in owners.items()]}
@@ -239,5 +241,13 @@ class Contract(unittest.TestCase):
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
             self.assertTrue(a._GUIDE_STATE['blocked'])
             self.assertEqual(a.GUIDE_VERSION,'2026-11-05.3')
+
+    def test_zoe_feedback_requires_mention_and_thread(self):
+        import weekly_feedback as w
+        body={'event_id':'Ev1','event':{'type':'app_mention','user':'U0CE06U7K52','channel':outbox.WEEKLY_CHANNEL,'ts':'10.2','thread_ts':'10.1','text':'<@'+outbox.BOT+'> Research update'}}
+        with patch.dict(os.environ,WEEKLY_FEEDBACK_ENABLED='true'):
+            self.assertIsNotNone(w.accept(body))
+            body['event'].pop('thread_ts')
+            self.assertIsNone(w.accept(body))
 
 if __name__=='__main__':unittest.main()

@@ -10,7 +10,7 @@ import os
 import re
 import urllib.parse
 
-GUIDE_VERSION = '2026-11-05.2'
+GUIDE_VERSION = '2026-11-05.4'
 ACTIVITY = 'b17354bc-69b1-44fe-bb92-7fda8fab1a5d'
 INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 OUTBOX = 'b9f3d371-6c3b-47f5-880a-47342ae69456'
@@ -325,11 +325,19 @@ review. Last validated owners survive a temporary Notion outage in this process.
             if _GUIDE_CACHE is None or policy_fingerprint(root, blocks) != _GUIDE_STATE.get('policy'):
                 raise ValueError('Guide policy changed or has no validated baseline; release review required')
         directory=blocks('40fff732-fc34-80f9-b488-cfafd7a7b257')
-        scenarios=[b for b in directory if b.get('type')=='child_page' and b['id'].replace('-','') not in ('40fff732fc34810eac53f085a6d47576','40fff732fc3481d6b394ca03b7149f6d')]
+        def scenario_pages(items, depth=0):
+            if depth>12: raise ValueError('Guide directory nesting exceeds bound')
+            for block in items:
+                if block['type']=='child_page': yield block
+                elif block.get('has_children') and block['type'] not in ('child_database','table'):
+                    yield from scenario_pages(blocks(block['id']),depth+1)
+        scenarios=[b for b in scenario_pages(directory) if b['id'].replace('-','') not in ('40fff732fc34810eac53f085a6d47576','40fff732fc3481d6b394ca03b7149f6d')]
+        unknown=[]
         for scenario in scenarios:
-            blocks(scenario['id'])
-        if scenarios:
-            raise ValueError('New scenario pages require applicability/policy review: '+', '.join(b['id'] for b in scenarios))
+            text_content(blocks(scenario['id']))
+            if scenario['id'].replace('-','') != '40fff732fc348187b3cbf23755ad4ea5': unknown.append(scenario['id'])
+        if unknown:
+            raise ValueError('New scenario pages require applicability/policy review: '+', '.join(unknown))
         active=False; route_table=None
         for b in root:
             if b['type']=='heading_2': active=plain(b['heading_2']['rich_text']).startswith('5.')
