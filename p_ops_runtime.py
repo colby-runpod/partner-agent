@@ -14,7 +14,9 @@ import os
 from pathlib import Path
 import sqlite3
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from zoneinfo import ZoneInfo
 
 from intake import Application, api, verify
@@ -31,9 +33,11 @@ from p_ops_test_lab import (TestLabLedger, active_task_queue, bundle_from_notion
 from p_ops_triage import ClaudeTriageClient
 from p_ops_workflow import (ApprovalFlowLedger, SlackApprovalClient, accept_context_reply,
                             process_flows, receive_interaction)
+import working_task_brief
 
 
 REVIEW_STATES = ("needs_review", "approved", "send_authorized", "review", "conflict")
+PARTNER_OPS_APP_ID = "A0CA2C43D4L"
 
 
 DASHBOARD_CSS = r"""
@@ -328,6 +332,10 @@ def config(env=None):
             "P_OPS_REVIEW_USER_IDS", env.get("P_OPS_CAPTURE_USER_IDS", "")).split(",") if value.strip()},
         "public_url": env.get("P_OPS_PUBLIC_URL", "").rstrip("/"),
     })
+    working_task_brief.config(cfg, prefix="P_OPS_", env=env)
+    cfg["feedback_users"] = {value.strip() for value in env.get(
+        "P_OPS_WORKING_TASK_FEEDBACK_USER_IDS", env.get(
+            "P_OPS_REVIEW_USER_IDS", env.get("P_OPS_CAPTURE_USER_IDS", ""))).split(",") if value.strip()}
     if cfg["runtime_enabled"] and not all((cfg["review_user"], cfg["review_password"], cfg["csrf_secret"])):
         raise ValueError("Set P_OPS_REVIEW_USER, P_OPS_REVIEW_PASSWORD, and P_OPS_CSRF_SECRET.")
     if cfg["review_posting"] and not cfg["review_channel"]:
@@ -340,6 +348,10 @@ def config(env=None):
         raise ValueError("Enable P_OPS_TRIAGE_SHADOW_ENABLED before interactive review.")
     if cfg["review_interactive"] and not cfg["review_user_ids"]:
         raise ValueError("Set P_OPS_REVIEW_USER_IDS before enabling interactive review.")
+    if cfg["working_task_brief_enabled"] and cfg.get("app_id") != PARTNER_OPS_APP_ID:
+        raise ValueError("The Working Task briefing must use the partner-ops Slack app.")
+    if cfg["working_task_brief_enabled"] and not cfg["feedback_users"]:
+        raise ValueError("Set P_OPS_WORKING_TASK_FEEDBACK_USER_IDS before enabling the briefing.")
     return cfg
 
 
@@ -350,15 +362,70 @@ class RuntimeState:
         with sqlite3.connect(self.path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS p_ops_runtime_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
 
-    def get(self, key):
+    def get(self, key, default=None):
         with sqlite3.connect(self.path) as db:
             row = db.execute("SELECT value FROM p_ops_runtime_state WHERE key=?", (key,)).fetchone()
-        return row[0] if row else None
+        return row[0] if row else default
 
     def set(self, key, value):
         with sqlite3.connect(self.path) as db:
             db.execute("INSERT INTO p_ops_runtime_state(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (key, value))
+
+    def put(self, key, value):
+        self.set(key, value)
+
+
+class WorkingTaskFeedbackLedger:
+    def __init__(self, path):
+        self.path = str(path)
+        with sqlite3.connect(self.path) as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS p_ops_working_task_feedback (
+                event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL,
+                created REAL NOT NULL)""")
+
+    def enqueue(self, event):
+        with sqlite3.connect(self.path) as db:
+            return db.execute("""INSERT OR IGNORE INTO p_ops_working_task_feedback
+                (event_id,payload,state,created) VALUES (?,?,'captured_for_reconciliation',?)""",
+                (event["event_id"], json.dumps(event), time.time())).rowcount == 1
+
+
+class WorkingTaskBriefSlackClient:
+    """Slack client restricted to the partner-ops Working Task brief."""
+    def __init__(self, cfg, token=None):
+        self.cfg = cfg
+        self.token = token or os.environ.get("SLACK_BOT_TOKEN", "")
+        if cfg.get("app_id") != PARTNER_OPS_APP_ID:
+            raise ValueError("The Working Task briefing must use the partner-ops Slack app.")
+        if not self.token:
+            raise ValueError("Set the partner-ops SLACK_BOT_TOKEN before enabling the briefing.")
+
+    def slack_preflight(self, channel):
+        request = urllib.request.Request("https://slack.com/api/auth.test", headers={
+            "Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                auth = json.load(response)
+                scopes = {scope.strip() for scope in response.headers.get(
+                    "X-OAuth-Scopes", "").split(",") if scope.strip()}
+        except (OSError, ValueError):
+            raise ValueError("Slack identity verification failed") from None
+        if auth.get("ok") is False or not auth.get("user_id"):
+            raise ValueError("Slack identity verification failed")
+        info = api("https://slack.com/api/conversations.info?" + urllib.parse.urlencode({"channel": channel}), self.token)
+        if (info.get("channel") or {}).get("id") != channel:
+            raise ValueError("Slack channel read verification failed")
+        api("https://slack.com/api/conversations.history?" + urllib.parse.urlencode({
+            "channel": channel, "limit": 1}), self.token)
+        if "chat:write" not in scopes:
+            raise ValueError("Slack chat:write scope is not verified")
+        return True
+
+    def say(self, channel, text):
+        return api("https://slack.com/api/chat.postMessage", self.token, {
+            "channel": channel, "text": text, "mrkdwn": True, "parse": "none",
+            "unfurl_links": False, "unfurl_media": False}).get("ts")
 
 
 class SlackSender:
@@ -832,7 +899,7 @@ class Dashboard:
                     ("Message sending", "Allows separately authorized messages to be sent.", os.environ.get("P_OPS_SEND_MESSAGES") == "true"),
                 ))
             main_content = ("<div class='hero'><div><p class='eyebrow'>Admin</p><h1>Settings</h1>"
-                            "<p class='lede'>View the production configuration and automation boundaries. Change these in Railway, then redeploy.</p>"
+                            "<p class='lede'>View the production configuration and automation boundaries. Change these in AWS, then redeploy.</p>"
                             "</div><span class='mode-pill'>Read only</span></div><div class='settings-grid'>"
                             "<section class='settings-card'><h2>Processing</h2><p>Controls that determine what the agent reads and evaluates.</p>%s</section>"
                             "<section class='settings-card'><h2>External actions</h2><p>High-impact gates remain off until explicitly enabled.</p>%s</section>"
@@ -944,6 +1011,8 @@ class RuntimeApp:
         self.cfg, self.dashboard, self.slack_app = cfg, dashboard, slack_app
         self.triage_client, self.notion_client = triage_client, notion_client
         self.approval_flows = ApprovalFlowLedger(cfg["db"])
+        self.working_task_state = RuntimeState(cfg["db"])
+        self.working_task_feedback = WorkingTaskFeedbackLedger(cfg["db"])
 
     def slack_events(self, env, start):
         def respond(code, value):
@@ -962,6 +1031,10 @@ class RuntimeApp:
             if body.get("type") == "url_verification":
                 return respond("200 OK", {"challenge": body.get("challenge", "")})
             if body.get("type") == "event_callback":
+                if body.get("team_id") == self.cfg.get("team_id") and body.get("api_app_id") == PARTNER_OPS_APP_ID:
+                    feedback = working_task_brief.accept_feedback(body, self.cfg, self.working_task_state)
+                    if feedback:
+                        self.working_task_feedback.enqueue(feedback)
                 capture = accept_capture(body, self.cfg)
                 if capture:
                     self.dashboard.capture.enqueue(capture)
@@ -1042,7 +1115,13 @@ class RuntimeApp:
                                                   "triage_shadow_enabled": self.cfg.get("triage_shadow", False),
                                                   "review_posting_enabled": self.cfg.get("review_posting", False),
                                                   "review_interactive_enabled": self.cfg.get("review_interactive", False),
-                                                  "review_channel_configured": bool(self.cfg.get("review_channel"))}))
+                                                  "review_channel_configured": bool(self.cfg.get("review_channel")),
+                                                  "working_task_brief_enabled": self.cfg.get("working_task_brief_enabled", False),
+                                                  "working_task_brief_channel": self.cfg.get("working_task_brief_channel"),
+                                                  "working_task_brief_time": "%02d:%02d Mountain" % (
+                                                      self.cfg.get("working_task_brief_hour", 8),
+                                                      self.cfg.get("working_task_brief_minute", 15)),
+                                                  "slack_app_id": self.cfg.get("app_id")}))
         if not self.cfg["runtime_enabled"]:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
         if path == "/slack/events":
@@ -1204,6 +1283,13 @@ def run_once(cfg, stores, clients=None, today=None):
     if os.environ.get("P_OPS_NOTION_WRITE") == "true" and notion.rows(("approved",)):
         client = clients.get("notion") or NotionClient()
         results.append(("notion", "approved", apply_ready(client, notion, include_auto=False)))
+    if cfg.get("working_task_brief_enabled"):
+        brief_client = clients.get("working_task_brief") or WorkingTaskBriefSlackClient(cfg)
+        posted = working_task_brief.run(cfg, state, brief_client,
+                                        notion=clients.get("working_task_notion"),
+                                        now_utc=clients.get("working_task_now"))
+        if posted:
+            results.append(("working_task_brief", day, "attempted"))
     return results
 
 

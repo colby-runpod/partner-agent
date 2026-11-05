@@ -1,12 +1,11 @@
 import datetime as dt
 import io
 import json
-import os
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import review
+import p_ops_runtime
 import working_task_brief as brief
 
 
@@ -20,6 +19,7 @@ CFG = {
     'working_tasks_source': 'tasks',
     'feedback_users': {'U-COLBY'},
     'users': {'U-COLBY'},
+    'app_id': p_ops_runtime.PARTNER_OPS_APP_ID,
 }
 
 
@@ -74,7 +74,7 @@ class Client:
 class WorkingTaskBriefTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
-        self.ledger = review.Ledger(tmp.name + '/ledger.sqlite')
+        self.ledger = p_ops_runtime.RuntimeState(tmp.name + '/ledger.sqlite')
         self.client = Client()
         self.now = dt.datetime(2026, 11, 5, 15, 15, tzinfo=dt.timezone.utc)  # 8:15 Mountain
 
@@ -154,14 +154,14 @@ class WorkingTaskBriefTests(unittest.TestCase):
             def __exit__(self, *args):
                 self.close()
 
-        client = review.ReviewClients({})
+        client = p_ops_runtime.WorkingTaskBriefSlackClient(
+            {'app_id': p_ops_runtime.PARTNER_OPS_APP_ID}, token='xoxb-test')
         replies = [
             {'ok': True, 'channel': {'id': 'C0C7HG8KYFL'}},
             {'ok': True, 'messages': []},
         ]
-        with patch.dict(os.environ, {'SLACK_BOT_TOKEN': 'xoxb-test'}), \
-             patch('review.urllib.request.urlopen', return_value=Response()), \
-             patch('review.api', side_effect=replies) as slack_api:
+        with patch('p_ops_runtime.urllib.request.urlopen', return_value=Response()), \
+             patch('p_ops_runtime.api', side_effect=replies) as slack_api:
             self.assertTrue(client.slack_preflight('C0C7HG8KYFL'))
         self.assertIn('conversations.info', slack_api.call_args_list[0].args[0])
         self.assertIn('conversations.history', slack_api.call_args_list[1].args[0])
@@ -177,11 +177,11 @@ class WorkingTaskBriefTests(unittest.TestCase):
                 self.close()
 
         response = Response(json.dumps({'ok': True, 'user_id': 'U-BOT'}).encode())
-        with patch.dict(os.environ, {'SLACK_BOT_TOKEN': 'xoxb-test'}), \
-             patch('review.urllib.request.urlopen', return_value=response), \
-             patch('review.api', side_effect=[{'channel': {'id': 'C0C7HG8KYFL'}}, {'messages': []}]):
+        with patch('p_ops_runtime.urllib.request.urlopen', return_value=response), \
+             patch('p_ops_runtime.api', side_effect=[{'channel': {'id': 'C0C7HG8KYFL'}}, {'messages': []}]):
             with self.assertRaisesRegex(ValueError, 'chat:write'):
-                review.ReviewClients({}).slack_preflight('C0C7HG8KYFL')
+                p_ops_runtime.WorkingTaskBriefSlackClient(
+                    {'app_id': p_ops_runtime.PARTNER_OPS_APP_ID}, token='xoxb-test').slack_preflight('C0C7HG8KYFL')
 
 
 if __name__ == '__main__':
