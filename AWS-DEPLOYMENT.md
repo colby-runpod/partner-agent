@@ -1,5 +1,10 @@
 # GitHub to AWS standby
 
+> The production Partner Agent now also has an active ECS runtime. The workflow
+> in this document remains the health-only emergency/standby path and must not
+> be used to deploy active processing. See `WORKING-TASK-BRIEFING.md` for the
+> guarded 8:15 AM Working Task briefing configuration on the active service.
+
 This workflow deploys the existing ECS Express service in health-only standby. It does not migrate databases, install business credentials, switch Slack endpoints, or enable processing.
 
 ## Setup
