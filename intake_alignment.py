@@ -222,7 +222,8 @@ def build_recap(remote, now_utc, start):
     from zoneinfo import ZoneInfo
     now_utc=now_utc.replace(tzinfo=dt.timezone.utc) if now_utc.tzinfo is None else now_utc
     refresh_guide(remote.notion)
-    pages=list(query(remote.notion,INTAKE))
+    pages=sorted(query(remote.notion,INTAKE),
+                 key=lambda p:p.get('last_edited_time') or p.get('created_time') or '', reverse=True)
     deliveries=list(query(remote.notion,OUTBOX))
     by_intake={}
     for p in deliveries:
@@ -278,7 +279,19 @@ def build_recap(remote, now_utc, start):
            'Sources: '+', '.join(html.escape(k)+': '+str(v) for k,v in sorted(sources.items()))]
     lines.append(guide_summary(remote.notion, start))
     for name,entries in groups.items():
-        if entries: lines.append('*'+name+' ('+str(len(entries))+')*\n\n'+'\n\n'.join(entries))
+        if entries:
+            # Historical outstanding work remains counted, not expanded into hundreds of posts.
+            # Keep whole entries (and their links) intact; newest updates are shown first.
+            selected=[]; used=0
+            for entry in entries:
+                if len(selected)>=3 or used+len(entry)>1200: break
+                selected.append(entry);used+=len(entry)+2
+            section='*'+name+' ('+str(len(entries))+')*'
+            if selected: section+='\n\n'+'\n\n'.join(selected)
+            omitted=len(entries)-len(selected)
+            if omitted:
+                section+='\n<https://app.notion.com/p/e5e29cefe2d94e9bb76357328d483861|View '+str(omitted)+' additional records in Partner Biz Dev>'
+            lines.append(section)
     if not any(groups.values()): lines.append('No recent or outstanding lead records.')
     return '\n\n'.join(lines)
 
@@ -335,7 +348,12 @@ review. Last validated owners survive a temporary Notion outage in this process.
         unknown=[]
         for scenario in scenarios:
             text_content(blocks(scenario['id']))
-            if scenario['id'].replace('-','') != '40fff732fc348187b3cbf23755ad4ea5': unknown.append(scenario['id'])
+            # Reviewed scenarios: weekly updates and the separate, disabled Working Task briefing.
+            # Reading a scenario does not enable its feature or grant new action authority.
+            if scenario['id'].replace('-','') not in (
+                '40fff732fc348187b3cbf23755ad4ea5',
+                '40fff732fc3481e2894cc6bbfa2f97dc',
+            ): unknown.append(scenario['id'])
         if unknown:
             raise ValueError('New scenario pages require applicability/policy review: '+', '.join(unknown))
         active=False; route_table=None

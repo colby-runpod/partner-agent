@@ -182,6 +182,23 @@ class Contract(unittest.TestCase):
         self.assertIn('Gmail',text);self.assertIn('Drafts awaiting your send',text);self.assertIn('not an email sent',text)
 
 
+    def test_recap_bounds_large_backlog_and_preserves_counts(self):
+        pages=[]
+        for n in range(800):
+            p=prop_page(str(uuid.UUID(int=n+2000)), **{'Company':'Lead '+str(n), 'Status':'Flagged', 'Source':'Email Direct', 'Request Summary':'A request '*30})
+            p['last_edited_time']='2026-11-05T12:00:00Z'
+            pages.append(p)
+        class Reader:
+            def notion(inner,method,path,data):
+                return {'results':pages if a.INTAKE in path else []}
+        with patch.object(a,'refresh_guide'):
+            text=a.build_recap(Reader(),dt.datetime.now(dt.timezone.utc),0)
+        self.assertLess(len(text),9000)
+        self.assertIn('Your decisions (800)',text)
+        self.assertIn('additional records',text)
+        self.assertIn('Email Direct: 800',text)
+        self.assertIn('*Guide:*',text)
+
     def test_inactive_or_missing_owner_is_held_and_logged(self):
         p=self.setup();original=self.remote.slack
         def slack(method,data):
@@ -218,12 +235,13 @@ class Contract(unittest.TestCase):
               {'id':'routes','type':'table'}]
         version_block=root[0]
         root[0]={'id':'metadata-callout','type':'callout','callout':{'rich_text':rich('Source of truth')},'has_children':True}
+        scenarios=['40fff732fc348187b3cbf23755ad4ea5','40fff732fc3481e2894cc6bbfa2f97dc']
         owners={k:v for k,v in a.ROUTES.items()}
         def request(method,path,data=None):
             if '/40fff732-fc34-810e-ac53-f085a6d47576/' in path: return {'results':root}
             if '/40fff732-fc34-80f9-b488-cfafd7a7b257/' in path: return {'results':[{'id':'library','type':'callout','has_children':True}]}
-            if '/library/' in path: return {'results':[{'id':'40fff732fc348187b3cbf23755ad4ea5','type':'child_page'}]}
-            if '/40fff732fc348187b3cbf23755ad4ea5/' in path: return {'results':[]}
+            if '/library/' in path: return {'results':[{'id':id,'type':'child_page'} for id in scenarios]}
+            if any('/'+id+'/' in path for id in scenarios): return {'results':[]}
             if '/metadata-callout/' in path: return {'results':[version_block]}
             if '/routes/' in path:
                 return {'results':[{'type':'table_row','table_row':{'cells':[rich(k),rich(''),rich(c),rich(' '.join(us))]}} for k,(c,us) in owners.items()]}
@@ -241,6 +259,12 @@ class Contract(unittest.TestCase):
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
             self.assertTrue(a._GUIDE_STATE['blocked'])
             self.assertEqual(a.GUIDE_VERSION,'2026-11-05.3')
+            root[2]['paragraph']['rich_text']=rich('Never send email')
+            version_block['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
+            scenarios.append('unreviewed-scenario')
+            a._GUIDE_CHECKED=0;a.refresh_guide(request)
+            self.assertTrue(a._GUIDE_STATE['blocked'])
+            self.assertIn('New scenario pages',a._GUIDE_STATE['reason'])
 
     def test_zoe_feedback_requires_mention_and_thread(self):
         import weekly_feedback as w
