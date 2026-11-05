@@ -77,7 +77,7 @@ def process(store,job,clients,ledger,cfg,notion):
         props={'Status':{'select':{'name':status}}}
         if routes:
             props['Intake Stage']={'select':{'name':'Routed Internally'}}
-            if len(routes)==1:props['Forward To']={'select':{'name':'Startup Program' if routes[0][0]=='VC/Incubator' else routes[0][0]}}
+            if len(routes)==1:props['Forward To']={'select':{'name':routes[0][0]}}
         stamp=dt.datetime.now(dt.timezone.utc).isoformat()
         note=('Partnerships intake action completed. Status: '+status+'\nActor: '+e['actor']+'\nRecorded: '+stamp+
             '\nSource: https://slack.com/archives/'+row['channel']+'/p'+source_ts.replace('.','')+

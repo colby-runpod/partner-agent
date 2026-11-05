@@ -195,7 +195,7 @@ class VCRouting(RoutingActions):
         self.save()
         job=src.handoff(self.data,self.event,self.cfg)
         self.assertEqual(job['channel'],'C0CCQ9311D2')
-        self.assertIn('<@U0B9ZRF3JUX>',job['text'])
+        self.assertIn('<@U0CE06U7K52>',job['text'])
         self.assertIn('Portfolio enablement request',job['text'])
         self.assertNotIn('Do not use this event description',job['text'])
         self.assertIn('• *Region:* US\n• *Lead score:*',job['text'])
@@ -230,7 +230,8 @@ class ResearchChannelLog(unittest.TestCase):
         r=dict(route='Research/University',screening={'tier':'Needs research'},score=2,decision='triage',email='lab@example.com')
         a=src.handoff(r,e,CFG)
         self.assertEqual(a['channel'],src.RESEARCH_CHANNEL)
-        self.assertEqual(a['text'].count('<@'),1)
+        self.assertIn('<@U0CE06U7K52>',a['text'])
+        self.assertEqual(a['text'].count('<@'),2)
         self.assertTrue(a['text'].endswith('cc <@'+src.COLBY+'>'))
         self.assertEqual(a['key'],src.handoff(r,dict(e,key='repeated'),CFG)['key'])
         self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
@@ -246,7 +247,7 @@ class AffiliateChannelLog(unittest.TestCase):
         self.assertEqual(a['text'].count('<@'),1)
         self.assertTrue(a['text'].endswith('cc <@'+src.COLBY+'>'))
         self.assertEqual(a['key'],src.handoff(r,dict(e,key='repeated'),CFG)['key'])
-        for route in ('Influencer/Creator','Partnerships'):
+        for route in ('Partnerships',):
             self.assertIsNone(src.handoff(dict(r,route=route,partnership_type='Referral'),e,CFG))
         self.assertIsNone(src.handoff(dict(r,signals={'spam':True}),e,CFG))
         self.assertIsNone(src.handoff(r,e,dict(CFG,routing_enabled=False)))
@@ -276,7 +277,7 @@ class AutomaticSpecialistRouting(unittest.TestCase):
         self.assertNotIn('<@OTHER>',job['text'])
         self.assertIn('startup program request',job['text'])
         manual=src.handoff(r,e,CFG,requested_route=src.VC_ROUTE,requested_by=src.COLBY)
-        self.assertEqual(job['key'],manual['key'])
+        self.assertNotEqual(job['key'],manual['key'])
         self.assertIn('What they bring:* Prototype workload',job['text'])
 
 class RoutingExceptions(unittest.TestCase):

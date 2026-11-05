@@ -32,6 +32,7 @@ that already exists; Draft in Gmail asks the scheduled pipeline, through Next
 Step Notes, to draft the card's reply in Colby's Gmail; Park sets the card
 aside. Notion writes need NOTION_WRITE=true and a token with insert access.
 """
+import intake_alignment as alignment
 import hubspot_links
 import question_progress
 import lead_completion
@@ -68,6 +69,7 @@ SELF_SERVE = ('Startup Program', 'Influencer/Creator', 'Affiliate Program')
 TYPES = ('Data Center / Infrastructure', 'Reseller/VAR', 'Technology/Integration', 'AI / Model',
          'Credits / Program', 'Co-marketing', 'VC/PE/Incubator', 'Misrouted / Other', 'Referral',
          'SI', 'Consultancy/Advisory', 'MSP', 'Community / Education')
+ROUTES = tuple(dict.fromkeys((*ROUTES, 'VC/Incubator', 'Marketing')))
 VERDICTS = ('verified', 'partial', 'unverified')
 DECISIONS = {'pursue': ':large_green_circle: Pursue',
              'triage': ':large_yellow_circle: Needs triage',
@@ -89,11 +91,14 @@ FREE_MAIL = {'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.
 NOTION_VERSION = '2025-09-03'
 ACTIONS = {'log_notion': 'Log in Notion', 'draft_gmail': 'Draft in Gmail', 'park': 'Park',
            'route_supply': 'Route to supply', 'route_events': 'Route to events',
-           'route_vc': 'Route to VC/incubator'}
+           'route_vc': 'Route to VC/incubator', 'route_startup':'Route to startup', 'route_research':'Route to research', 'route_affiliate':'Route to affiliate'}
 ROUTING_ACTIONS = {
     'route_supply': ('Supply Team', 'Supply handoff:'),
     'route_events': ('Events/Sponsorship', 'Event handoff:'),
     'route_vc': (partner_sources.VC_ROUTE, 'VC/incubator handoff:'),
+    'route_startup': ('Startup Program','Startup handoff:'),
+    'route_research': ('Research/University','Research handoff:'),
+    'route_affiliate': ('Affiliate Program','Affiliate handoff:'),
 }
 GMAIL_DRAFTS = ('Probe reply', 'Pointer reply')
 UP, DOWN = {'+1', 'thumbsup'}, {'-1', 'thumbsdown'}
@@ -205,6 +210,10 @@ Return exactly this JSON shape:
  "dean_motion": "", "event_motion": "", "risks": [""], "sources": [{"title": "", "url": "https://..."}]}''' % (
     ', '.join(TYPES), ', '.join(ROUTES))
 
+INSTRUCTIONS += '''
+Startup Program is an individual company seeking credits/perks for itself; VC/Incubator is a fund, accelerator or studio seeking a portfolio partnership. Use these distinct routes. Marketing is non-event, non-creator campaign collaboration. Route research/teaching requests to Research/University and event sponsorship to Events/Sponsorship even for a university. Specialist routing is independent of quality; state risks as warnings, not approval or automatic rejection.
+'''
+
 SCREENING_INSTRUCTIONS = '''
 Additional screening v2 fields supersede older scoring implications, not the existing JSON fields.
 The final JSON MUST include this nested object in addition to every field above:
@@ -283,6 +292,8 @@ def config():
                 raise ValueError('Missing environment setting: ' + name)
     tasks.config(cfg)
     assistant.config(cfg)
+    if alignment.enabled() and (not cfg['notion_write'] or not cfg['outbox_enabled']):
+        raise ValueError('Intake alignment requires Notion writes and outbox delivery')
     cfg['enabled'] = cfg['chat_enabled'] or cfg['review_enabled']
     return cfg
 
@@ -402,7 +413,7 @@ def create_app():
                                'slack_user_token': bool(os.environ.get('SLACK_USER_TOKEN')),
                                'outbox_enabled': cfg.get('outbox_enabled', False),
                                'screening_v2_enabled': cfg.get('screening_v2', False),
-                               'intake_enabled': False}).encode()
+                               'intake_enabled': False, 'intake_alignment_enabled':alignment.enabled(), 'guide_version':alignment.GUIDE_VERSION}).encode()
             start('200 OK', [('Content-Type', 'application/json'), ('Content-Length', str(len(data)))])
             return [data]
         if env.get('PATH_INFO') == '/slack/interactions' and env.get('REQUEST_METHOD') == 'POST':
@@ -1049,6 +1060,7 @@ def process(store, job, clients, ledger=None, cfg=None):
         store.update(key, state='processing')
         question_progress.working(event)
         outcome = 'ok'
+        intake_page=None
         try:
             if event.get('kind') == 'review_manual':
                 try:
@@ -1057,7 +1069,21 @@ def process(store, job, clients, ledger=None, cfg=None):
                     raise
                 except Exception:
                     raise ThreadUnreadable() from None
+            intake_page=None
+            if alignment.enabled():
+                intake_page=alignment.capture(NotionWriter(cfg),event)
             text = clients.review(event)
+            if alignment.enabled():
+                data=getattr(clients,'last',{})
+                route=alignment.set_route(NotionWriter(cfg),intake_page,('Affiliate Program' if data.get('route')=='Influencer/Creator' else data.get('route')) or 'Review Needed',key)
+                data['route']=route
+                if alignment.value(intake_page,'Contact')=='Partner submission':
+                    props={'Contact':alignment.title(data.get('contact') or data.get('company') or 'Unknown contact'),
+                           'Company':alignment.rich(data.get('company') or ''),
+                           'Request Summary':alignment.rich(data.get('summary') or event.get('text','')[:3000])}
+                    if data.get('email'): props['Email']={'email':data['email']}
+                    NotionWriter(cfg)._req('PATCH','pages/'+intake_page['id'],{'properties':props})
+                data['parked_by']=bool(re.search(r'Parked by Colby|\[routing hold\]', alignment.value(intake_page,'Next Step Notes')+' '+alignment.value(intake_page,'Draft / Resource'),re.I))
             if ledger:
                 text = with_prior(text, ledger, clients, event)
             route_job = partner_sources.handoff(getattr(clients, 'last', None) or {}, event, cfg or {})
@@ -1076,6 +1102,8 @@ def process(store, job, clients, ledger=None, cfg=None):
         if ledger and outcome != 'not_digest':
             try:
                 ledger.record(key, event, getattr(clients, 'last', None) if outcome == 'ok' else None, outcome)
+                if alignment.enabled() and intake_page:
+                    ledger.mark(key,notion_id=intake_page['id'],notion_url=intake_page['url'])
             except Exception:
                 print('Review ledger write failed.', flush=True)
         if cfg and outcome in ('failed', 'unreadable'):
@@ -1099,6 +1127,15 @@ def process(store, job, clients, ledger=None, cfg=None):
                 alert(clients, cfg, event, 'A review card may not have posted')
         else:
             store.update(key, reply_state='sent')
+            if alignment.enabled():
+                try:
+                    saved=ledger.review(key)
+                    alignment.record_post(NotionWriter(cfg)._req,key+':review:'+str(card_ts),
+                        getattr(clients,'last_posted_text',None) or job['reply'],
+                        cfg.get('shadow_channel') if cfg.get('review_mode')=='shadow' else event['channel'],
+                        str(card_ts),intake=saved.get('notion_id'))
+                except Exception:
+                    store.update(key,error='review_audit_reconciliation_required')
             state = 'sent'
         if ledger:
             try:
@@ -1336,6 +1373,9 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
         clients.ephemeral(event, 'This one is already parked.')
         return
     try:
+        if alignment.enabled():
+            url,page_id=lead_commands.ensure_record(notion,ledger,row,data)
+            alignment.audit(notion._req,key+':click','Card decision',event['action'],intake=page_id,channel=event['channel'],actor='Colby')
         if event['action'] in ROUTING_ACTIONS:
             if user != partner_sources.COLBY:
                 clients.ephemeral(event, 'Only Colby can route a lead.')
@@ -1352,7 +1392,7 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 return
             hubspot_links.hydrate(data, clients)
             target = ROUTING_ACTIONS[event['action']][0]
-            route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target)
+            route_job = partner_sources.handoff(data, data['source_event'], cfg, requested_route=target,requested_by=user)
             if route_job is None:
                 clients.ephemeral(event, 'This lead is flagged as spam or has no usable information; nothing was routed.')
                 return
@@ -1365,12 +1405,19 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                 lead_completion.enqueue_handoff(store,route_job,data['source_event'],target)
                 status = 'Delivered to '+target+' · <'+existing['result_url']+'|Open handoff>'
             else:
-                status = 'Delivery unconfirmed for '+target+'; held for reconciliation. Do not resend.'
+                status = ('Queued for delivery to '+target if alignment.enabled() and not existing.get('error') else 'Delivery unconfirmed for '+target+'; held for reconciliation. Do not resend.')
             prefix = ROUTING_ACTIONS[event['action']][1]
             notes = [n for n in notes if not n.startswith(prefix)]
             notes.append(prefix+' '+status+' · requested by <@'+user+'>')
             done.add(event['action'])
         elif event['action'] == 'park':
+            if alignment.enabled():
+                url,page_id=lead_commands.ensure_record(notion,ledger,row,data)
+                page=notion._req('GET','pages/'+page_id)
+                earlier=alignment.value(page,'Next Step Notes')
+                marker='Parked by Colby '+dt.datetime.now(dt.timezone.utc).isoformat()+'; no automatic outbound action.'
+                notion._req('PATCH','pages/'+page_id,{'properties':{'Next Step Notes':alignment.rich(earlier+'\n'+marker)}})
+                alignment.audit(notion._req,key,'Card decision','Parked by Colby',intake=page_id,actor='Colby')
             ledger.mark(row['key'], parked_by=user)
             notes.append(':double_vertical_bar: Parked by <@%s>' % user)
             done |= set(ACTIONS)
@@ -1394,7 +1441,11 @@ def process_action(store, job, clients, ledger, cfg, notion=None):
                     clients.ephemeral(event, 'There is no email draft on this card to send to Gmail.')
                     return
                 try:
-                    notion.request_draft(page_id, data, body)
+                    if alignment.enabled():
+                        alignment.request_pipeline(notion,page_id,key,'Prepare a reply for this lead. Proposed wording for review: '+body,
+                            'https://slack.com/archives/'+row['channel']+'/p'+row['ts'].replace('.',''))
+                    else:
+                        notion.request_draft(page_id, data, body)
                 except AlreadyDrafted:
                     clients.ephemeral(event, 'This row already has a Gmail draft, so I did not ask for another. Check '
                                              'your Gmail drafts, or clear Gmail Draft ID on the row to redo it: %s' % url)
@@ -1621,7 +1672,14 @@ def run_summary(cfg, ledger, clients, now_utc=None, store=None):
     start = state.get('through', (now_utc - (local-local.replace(hour=0,minute=0,second=0,microsecond=0))).replace(
         tzinfo=dt.timezone.utc).timestamp())
     rows = [r for r in ledger.since(start) if r['created'] < end]
-    text = build_summary(cfg, rows, clients, now_utc, store=store)
+    if alignment.enabled():
+        import outbox
+        try: text=alignment.build_recap(outbox.Remote(),now_utc,start)
+        except Exception:
+            print('Shared recap read failed; reporting window retained for retry.',flush=True)
+            return False
+    else:
+        text = build_summary(cfg, rows, clients, now_utc, store=store)
     pending = dict(date=local.strftime('%Y-%m-%d'), start=start, end=end,
                    channel=cfg['summary_channel'], text=text, parts=summary_parts(text), receipts=[], status='sending')
     state['pending'] = pending
@@ -1633,6 +1691,9 @@ def run_summary(cfg, ledger, clients, now_utc=None, store=None):
                 raise ValueError('Missing Slack receipt')
             pending['receipts'].append(receipt)
             ledger.put('daily_summary_state', json.dumps(state))
+            if alignment.enabled():
+                alignment.record_post(NotionWriter(cfg)._req,'recap:'+pending['date']+':'+str(len(pending['receipts'])),
+                    part,pending['channel'],receipt,kind='daily_digest')
     except Exception:
         pending['status'] = 'unconfirmed'
         ledger.put('daily_summary_state', json.dumps(state))

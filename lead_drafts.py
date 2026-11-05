@@ -1,4 +1,5 @@
 """Explicit, reviewable email drafts. Gmail creation is a queued human-requested handoff."""
+import intake_alignment as alignment
 import html
 import json
 import os
@@ -107,6 +108,16 @@ def process(store,job,clients,ledger,cfg,notion=None):
             previous=latest(store,e)
             if e['action']=='send':
                 reply='I can draft the email or request a Gmail draft, but cannot send email. Review and send it from Gmail.'
+            elif alignment.enabled():
+                if not cfg.get('notion_write') or notion is None: raise ValueError('Notion unavailable')
+                row=ledger.find(channel=e['channel'],thread_ts=e['thread_ts'])
+                if not row: raise ValueError('No saved lead')
+                data=json.loads(row['data'])
+                store.update(key,state='writing')
+                url,page=lead_commands.ensure_record(notion,ledger,row,data)
+                alignment.request_pipeline(notion,page,key,e['question'],lead_commands.link(e))
+                store.update(key,ref=json.dumps(dict(notion_url=url,status='requested')))
+                reply='Recorded for the scheduled pipeline: <'+url+'|Notion request>. No Gmail draft or email send is confirmed. Drafts requiring partners@runpod.io stay blocked until the sender and partners@ signature can be set.'
             elif e['action']=='gmail':
                 if not previous:raise ValueError('No prior draft')
                 if not cfg.get('notion_write') or notion is None:raise ValueError('Notion unavailable')

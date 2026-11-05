@@ -1,4 +1,5 @@
 """Explicit Colby-approved Slack intake and durable specialist handoffs."""
+import intake_alignment as alignment
 import hubspot_links
 import hashlib
 import html
@@ -94,6 +95,10 @@ def suggested_review(review):
 
 
 def handoff_key(review, event, route):
+    if alignment.enabled():
+        identity = alignment.source_ref(event) if event.get('channel') and event.get('ts') else event['key']
+        destination = alignment.ROUTES.get(route, (route,))[0]
+        return 'handoff:'+hashlib.sha256((destination+'|'+identity).encode()).hexdigest()
     identity = str(review.get('email') or review.get('company') or '').strip().casefold()
     if identity in ('', 'not stated', 'unknown', 'n/a'):
         identity = event['key']
@@ -106,12 +111,16 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     route = requested_route or review.get('route')
     if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
         route = VC_ROUTE
+    if route == 'Influencer/Creator': route = 'Affiliate Program'
     startup_request = route == 'Startup Program'
-    if startup_request:
-        route = VC_ROUTE  # Shared destination/receipt with the manual startup/VC route.
     signals = review.get('signals') or {}
     explicit = requested_by == COLBY and bool(requested_route)
-    if signals.get('spam'): return None
+    if signals.get('spam') or event.get('synthetic_test'): return None
+    if alignment.enabled():
+        screen=review.get('screening') or {}
+        evidence=str(screen.get('risk_evidence') or '')
+        if review.get('parked_by') or signals.get('legal_block_citation'): return None
+        if screen.get('risk')=='policy_review' and re.search(r'https://',evidence) and re.search(r'sanction|export.control',evidence,re.I): return None
     # Classification alone is not an actionable submission.
     absent = {'', 'not stated', 'not provided', 'unknown', 'n/a', 'none', 'not captured'}
     details = [review.get(k) for k in ('company', 'contact', 'email', 'requested_action',
@@ -120,17 +129,22 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         return None
     if route == 'Supply Team':
         channel, greeting = 'C0CAL8C08RK', 'Hey <@U0ACSTWBYHG>-passing along a supply-side infra lead.'
-    elif route == 'Events/Sponsorship':
+    elif route in ('Events/Sponsorship', 'Marketing'):
         channel, greeting = 'C0CAKA6PW8K', 'Hey <@U0AB1TSBK5X> and <@U0APRAUGJ6P>-passing along an event/sponsorship request.'
-    elif route == VC_ROUTE:
+    elif route in (VC_ROUTE, 'Startup Program'):
         channel = VC_CHANNEL
-        greeting = 'Hey <@'+CAMERON+'>-passing along a '+('startup program' if startup_request else 'VC/incubator')+' request.'
+        owner = CAMERON if startup_request else 'U0CE06U7K52'
+        greeting = 'Hey <@'+owner+'>-passing along a '+('startup program' if startup_request else 'VC/incubator')+' request.'
     elif route == 'Affiliate Program':
         channel, greeting = AFFILIATE_CHANNEL, 'Affiliate inquiry logged for the incoming owner’s review.'
     elif route == 'Research/University':
-        channel, greeting = RESEARCH_CHANNEL, 'Research/education request for the team’s review.'
+        channel, greeting = RESEARCH_CHANNEL, 'Hey <@U0CE06U7K52>-passing along a research/education request.'
     else: return None
-    # One specialist handoff per contact/route, including repeated submissions across sources.
+    if alignment.enabled():
+        channel, owners=alignment.ROUTES[route]
+        prefix=' and '.join('<@'+u+'>' for u in owners)
+        greeting=('Hey '+prefix+'-' if prefix else '')+'Passing along a '+route+' request.'
+    # Shared receipt identity is the submission and destination when alignment is enabled.
     key = handoff_key(review, event, route)
     source = event.get('source_url')
     if not source:
@@ -162,11 +176,26 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     # Do not fabricate a CRM record ID or use an unverified model-generated CRM URL.
     crm = hubspot_links.source_url(event)
     text += ('\n• <%s|HubSpot contact>' % crm if crm else '\n• HubSpot: Not available in the original submission')
+    text += '\n\nReact :white_check_mark: or :eyes: to pick up; :x: to pass.'
     text += '\n\ncc <@%s>' % COLBY
-    return dict(completion_source=event,completion_route=route,kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
+    return dict(completion_source=event,completion_route=route,requested_by=requested_by,kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
 
 
 def process_handoff(store, job, clients):
+    if alignment.enabled():
+        if job['state'] != 'pending': return
+        import review
+        cfg=review.config()
+        event=json.loads(job['payload'])
+        try:
+            page=alignment.queue_handoff(review.NotionWriter(cfg),event)
+            status=alignment.value(page,'Status')
+            ts=alignment.value(page,'Message TS');url=alignment.value(page,'Permalink')
+            store.update(job['key'],state='done',ref=ts or page['id'],result_url=url if ts else '',
+                         error='' if status in ('Queued','Posted','Confirmed') else 'handoff_'+status.lower()+'_needs_reconciliation')
+        except Exception:
+            store.update(job['key'],state='done',error='handoff_queue_reconciliation_required')
+        return
     # Commit the send intent before the network call. Never retry an uncertain send.
     if job['state'] != 'pending':
         store.update(job['key'], state='done', error='handoff_send_unconfirmed')

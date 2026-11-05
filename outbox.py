@@ -3,6 +3,7 @@
 A durable sending fence deliberately holds ambiguous Slack outcomes for reconciliation.
 Never retry a timeout as a new post. One dedicated outbox worker owns this ledger, alongside the existing review worker.
 """
+import intake_alignment as alignment
 import datetime as dt
 import json
 import os
@@ -23,6 +24,7 @@ BOT = 'U0C7372ET45'
 WEEKLY_CHANNEL = 'C0CARSDJ4H0'
 SIGNAL_CHANNEL = 'C0BN1S7055G'
 CHANNELS = {'C0CAL8C08RK', 'C0CAKA6PW8K', 'C0C7HG8KYFL', 'C0C7R970C5T', WEEKLY_CHANNEL, SIGNAL_CHANNEL}
+CHANNELS |= alignment.SPECIALIST_CHANNELS
 ACTIONS = {'outbox_approve': 'Approve', 'outbox_decline': 'Decline', 'outbox_call': 'Call first'}
 KINDS = {'supply_lead', 'event_request', 'priority_alert', 'daily_digest', 'invitation_queue', 'other'}
 
@@ -171,6 +173,7 @@ class Remote:
 
 class Outbox:
     def __init__(self, path, remote=None, storage=None):
+        self.aligned=alignment.enabled()
         self.path=path; self.remote=remote or Remote(); self.verified=False
         self.storage=storage
         self.signal_enabled = os.environ.get('SIGNAL_OUTBOX_ENABLED') == 'true'
@@ -194,6 +197,9 @@ class Outbox:
             raise ValueError('Outbox cutoff requires a timezone')
         return parsed
     def eligible(self,page):
+        if self.aligned and prop(page,'Channel ID') not in (WEEKLY_CHANNEL,SIGNAL_CHANNEL):
+            name=row(page)['title']
+            if not name.startswith(('pipeline:', 'Invitation:', 'tpa:')): return False
         if not self.selected(page['id'], {'channel':prop(page,'Channel ID')}): return False
         if self.created_after is None: return True
         try: return self.timestamp(page.get('created_time')) > self.created_after
@@ -292,9 +298,16 @@ class Outbox:
                 props['Status']={'select':{'name':'Posted'}}
             props['Posted At']={'date':{'start':d['at']}}
         self.remote.patch(r['id'],props)
+        if self.aligned:
+            if r['channel'] in alignment.SPECIALIST_CHANNELS:
+                alignment.sync_receipt(self.remote,r,d,props['Permalink']['url'])
+            else:
+                alignment.audit(self.remote.notion,r['id']+':'+(d.get('decision') or 'posted'),'Card decision' if d.get('decision') else 'Note',
+                    'Outbox '+(d.get('decision') or 'posted')+': '+r['title'],outbox=r['id'],channel=r['channel'],permalink=props['Permalink']['url'])
         self.save(r['id'],state='settled' if d['decision'] else 'posted',error='')
     def poll(self):
         self.verify()
+        if self.aligned: alignment.refresh_guide(self.remote.notion)
         # Resume writebacks/decisions without re-posting messages.
         pending=self.pending_deliveries()
         for d in pending:
@@ -323,6 +336,12 @@ class Outbox:
             if d['state']=='sending':
                 self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Ambiguous Slack delivery; reconcile before any retry. No automatic repost.')})
             return
+        if self.aligned and r['channel'] not in (WEEKLY_CHANNEL,SIGNAL_CHANNEL):
+            try: age=dt.datetime.now(dt.timezone.utc)-self.timestamp(page.get('created_time'))
+            except (ValueError,TypeError):
+                self.remote.patch(r['id'],{'Error':rich('Missing creation time; held for reconciliation')});return
+            if age > dt.timedelta(hours=72):
+                self.remote.patch(r['id'],{'Error':rich('Older than 72 hours; pipeline must reconcile before a fresh request')});return
         if r['ts']: return  # Never adopt or edit a message not in our own ledger.
         if r['before']:
             try:
@@ -346,6 +365,17 @@ class Outbox:
             if p['channel']!=r['channel']:
                 self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Parent channel differs')});return
             r['thread']=p['ts']
+        if self.aligned and r['channel'] in alignment.SPECIALIST_CHANNELS:
+            try:
+                intake=alignment.intake_for(self.remote,r)
+                prior=alignment.prior_post(self.remote,r)
+                if prior:
+                    if self.claim_send(r):
+                        self.save(r['id'],ts=prior,state='sync')
+                        self.sync(self.get(r['id']))
+                    return
+            except Exception as exc:
+                self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Handoff preflight failed: '+str(exc)[:300])});return
         try: message=payload(r)
         except ValueError as e:
             self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich(str(e))});return
@@ -353,7 +383,7 @@ class Outbox:
         fresh = self.remote.get(r['id'])
         if not self.eligible(fresh): return
         if fresh.get('archived') or fresh.get('in_trash') or prop(fresh,'Status')!='Queued' or prop(fresh,'Message TS'): return
-        if r['channel'] in (WEEKLY_CHANNEL, SIGNAL_CHANNEL) and row(fresh)!=r: return  # Revalidate edited weekly content on the next poll.
+        if row(fresh)!=row(page): return  # Revalidate edited weekly content on the next poll.
         if r['channel']==WEEKLY_CHANNEL and os.environ.get('WEEKLY_FEEDBACK_ENABLED')=='true':
             import weekly_feedback
             r['weekly_draft_id']=weekly_feedback.resolve_draft(self.remote,r)
@@ -398,7 +428,10 @@ class Outbox:
                 self.remote.slack('chat.postEphemeral',{'channel':e['channel'],'user':e['user'],'text':'Only Colby can decide invitations'});return
             decision=ACTIONS[e['action']]
         else:
-            if r['kind'] not in ('supply_lead','event_request') or e['user']==BOT: return
+            if e['user']==BOT: return
+            if self.aligned:
+                if r['channel'] not in alignment.SPECIALIST_CHANNELS or e.get('reply') or not alignment.pickup_allowed(r,e['user']): return
+            elif r['kind'] not in ('supply_lead','event_request'): return
             user=self.remote.slack('users.info',{'user':e['user']})['user']
             if user.get('is_bot') or user.get('is_app_user') or user.get('deleted'): return
             if e.get('reply') and e['user']==COLBY: return
