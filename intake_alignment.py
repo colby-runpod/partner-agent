@@ -10,7 +10,7 @@ import os
 import re
 import urllib.parse
 
-GUIDE_VERSION = '2026-11-05.4'
+GUIDE_VERSION = '2026-11-05.5'
 ACTIVITY = 'b17354bc-69b1-44fe-bb92-7fda8fab1a5d'
 INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 OUTBOX = 'b9f3d371-6c3b-47f5-880a-47342ae69456'
@@ -382,7 +382,7 @@ def request_pipeline(notion, page_id, key, request, source_url):
     if marker in earlier: return
     instruction=(marker+'\nRequested by Colby. '+request+'\nSource: '+source_url+
         '\nOwner: scheduled pipeline. Report Completed with a receipt, or Blocked/Failed with a reason. '
-        'Never send email. For email drafts, require partners@runpod.io From and partners@ signature; '
+        'This is Colby’s explicit draft request. Channel-routed leads otherwise receive handoffs only; no automatic affiliate pointer emails. Never send email. For email drafts, require partners@runpod.io From and partners@ signature; '
         'if unavailable, record Blocked. Partner signup invitations use '
         'https://www.suger.io/partner-signup/8a0b9ce8-c25c-4ffb-b5f2-2157e4b1373d.\n')
     audit(notion._req,key+':request','Card decision',instruction,intake=page_id,actor='Colby',permalink=source_url)

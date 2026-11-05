@@ -654,6 +654,8 @@ DEAN = ("Hey Dean -- passing along a supply-side infra lead.\nQuick details:\n\n
 
 def drafts(review, email, submitted):
     """Copy-ready text for the card. Returns a list of (label, text)."""
+    if alignment.enabled() and review['route'] in alignment.ROUTES:
+        return []  # Guide rule 8: receiving team owns the reply unless Colby requests a draft.
     if review['route'] == 'Affiliate Program':
         return []  # Affiliate owner backlog replaces applicant email drafting.
     fill = {'first': review['first_name'], 'company': review['company_short']}

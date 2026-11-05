@@ -250,4 +250,10 @@ class Contract(unittest.TestCase):
             body['event'].pop('thread_ts')
             self.assertIsNone(w.accept(body))
 
+    def test_channel_routes_have_no_automatic_email_draft(self):
+        import review
+        for route in a.ROUTES:
+            with self.subTest(route=route):
+                self.assertEqual(review.drafts({'route':route},'contact@example.com','2026-11-05'),[])
+
 if __name__=='__main__':unittest.main()
