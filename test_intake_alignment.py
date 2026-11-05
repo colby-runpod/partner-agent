@@ -29,6 +29,7 @@ class AlignedRemote(Remote):
     def notion(self,method,path,data=None):
         if method=='POST' and path.endswith('/query'):
             if a.ACTIVITY in path:
+                if 'and' in data.get('filter',{}): return {'results':self.activity}
                 needle=data['filter']['rich_text']['equals']
                 return {'results':[p for p in self.activity if a.value(p,'Source Ref')==needle]}
             return {'results':list(self.pages.values())}
@@ -36,6 +37,8 @@ class AlignedRemote(Remote):
             p={'id':str(uuid.uuid4()),'properties':data['properties']};self.activity.append(p);return p
         raise AssertionError((method,path))
     def slack(self,method,data):
+        if method=='conversations.members': return {'members':['U0ACSTWBYHG'],'response_metadata':{}}
+        if method=='users.info': return {'user':{'id':data['user'],'deleted':False}}
         if method=='conversations.history':return {'messages':self.history,'response_metadata':{}}
         return super().slack(method,data)
 
@@ -43,6 +46,7 @@ class AlignedRemote(Remote):
 class Contract(unittest.TestCase):
     def setUp(self):
         self.env=patch.dict(os.environ,INTAKE_ALIGNMENT_ENABLED='true',SLACK_TEAM_ID='T1');self.env.start();self.addCleanup(self.env.stop)
+        state=patch.dict(a._GUIDE_STATE,blocked=False);state.start();self.addCleanup(state.stop)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.iid=str(uuid.UUID(int=1000))
     def setup(self,n=1):
@@ -173,7 +177,64 @@ class Contract(unittest.TestCase):
         class Reader:
             def notion(inner,method,path,data):
                 return {'results':[p] if a.INTAKE in path else []}
-        text=a.build_recap(Reader(),dt.datetime.now(dt.timezone.utc),0)
+        with patch.object(a,'refresh_guide'):
+            text=a.build_recap(Reader(),dt.datetime.now(dt.timezone.utc),0)
         self.assertIn('Gmail',text);self.assertIn('Drafts awaiting your send',text);self.assertIn('not an email sent',text)
+
+
+    def test_inactive_or_missing_owner_is_held_and_logged(self):
+        p=self.setup();original=self.remote.slack
+        def slack(method,data):
+            if method=='users.info': return {'user':{'id':data['user'],'deleted':True}}
+            return original(method,data)
+        self.remote.slack=slack
+        self.box.post(p)
+        self.assertFalse(self.posts())
+        self.assertEqual(a.value(self.remote.get(p['id']),'Status'),'Failed')
+        self.assertTrue(any(a.value(p,'Detail').startswith('DRIFT:') for p in self.remote.activity))
+
+    def test_guide_line_reports_durable_drift_and_degraded_cache(self):
+        self.setup()
+        a.audit(self.remote.notion,'drift1','Reconciliation','DRIFT: section 5 - owner absent')
+        with patch.dict(a._GUIDE_STATE,degraded=True,reason='Guide unavailable',reviewed='2020-01-01'):
+            line=a.guide_summary(self.remote.notion,0)
+        self.assertIn('1 drift events',line)
+        self.assertIn('review overdue',line)
+        self.assertIn('last reviewed snapshot',line)
+
+    def test_alias_source_receipt_gets_check(self):
+        p=self.setup()
+        self.remote.patch(self.iid,{'Intake Ref':a.rich('slack:C0BQKEQLSKH:100.1')})
+        self.box.post(p)
+        self.assertTrue(any(m=='reactions.add' and d['timestamp']=='100.1' for m,d in self.remote.calls))
+
+
+    def test_guide_owner_version_change_refreshes_but_policy_change_blocks(self):
+        def rich(text): return [{'plain_text':text}]
+        root=[{'type':'paragraph','paragraph':{'rich_text':rich('Guide version: 2026-11-05.2 Last reviewed: 2026-11-05')}},
+              {'type':'heading_2','heading_2':{'rich_text':rich('1. Core rules')}},
+              {'type':'paragraph','paragraph':{'rich_text':rich('Never send email')}},
+              {'type':'heading_2','heading_2':{'rich_text':rich('5. Routing rules')}},
+              {'id':'routes','type':'table'}]
+        owners={k:v for k,v in a.ROUTES.items()}
+        def request(method,path,data=None):
+            if '/40fff732-fc34-810e-ac53-f085a6d47576/' in path: return {'results':root}
+            if '/40fff732-fc34-80f9-b488-cfafd7a7b257/' in path: return {'results':[]}
+            if '/routes/' in path:
+                return {'results':[{'type':'table_row','table_row':{'cells':[rich(k),rich(''),rich(c),rich(' '.join(us))]}} for k,(c,us) in owners.items()]}
+            raise AssertionError(path)
+        with patch.object(a,'_GUIDE_CHECKED',0),patch.object(a,'_GUIDE_CACHE',None),patch.object(a,'GUIDE_VERSION','2026-11-05.2'),patch.dict(a.ROUTES),patch.dict(a._GUIDE_STATE),patch.object(a,'audit'):
+            a.refresh_guide(request)
+            self.assertFalse(a._GUIDE_STATE['degraded'])
+            root[0]['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
+            owners['Affiliate Program']=('C0CD3M1QG4U',('U0123456789',))
+            a._GUIDE_CHECKED=0;a.refresh_guide(request)
+            self.assertEqual(a.GUIDE_VERSION,'2026-11-05.3')
+            self.assertEqual(a.ROUTES['Affiliate Program'][1],('U0123456789',))
+            root[0]['paragraph']['rich_text']=rich('Guide version: 2026-11-05.4 Last reviewed: 2026-11-05')
+            root[2]['paragraph']['rich_text']=rich('Send email automatically')
+            a._GUIDE_CHECKED=0;a.refresh_guide(request)
+            self.assertTrue(a._GUIDE_STATE['blocked'])
+            self.assertEqual(a.GUIDE_VERSION,'2026-11-05.3')
 
 if __name__=='__main__':unittest.main()

@@ -49,3 +49,18 @@ Every 15 minutes the process attempts to read and validate the guide and route t
 Run `python -m unittest discover -q`. New contract tests cover delivery adoption, duplicate queue rows, stale rows, parks, wrong routes, source markers, owner-only pickup, distinct submissions, legal/test exclusions, all-source recap and failure-before-review.
 
 Outstanding live acceptance: runtime permissions, actual backlog reconciliation/cutover, deployment, channel/owner membership and natural end-to-end events. Do not mark the Operating Model checklist live until those are verified.
+
+
+## Latest brief review, November 5
+
+Compared with https://docs.google.com/document/d/16GnE_w248fLbEQZTn31qtAXh9hIpny-yHCxMWppxauQ and the live Operating Model v2026-11-05.2. No new routing owner assignments were added. The additional emphasis is continuous Guide reconciliation.
+
+- Recaps refresh the Guide and include its version, durable drift count for the reporting window, fallback/read state, and overdue or missing review date.
+- Before a new specialist delivery, resolve every owner as an active Slack user and confirm channel membership with pagination. Failure prevents the send and creates a DRIFT reconciliation entry. Runtime Slack access needs users:read and the appropriate conversations.members scopes for the destination channels; verify these before activation.
+- Owner-only version changes can refresh in a running process when the policy fingerprint is unchanged. Changed policy text or new scenario pages hold intake/handoffs for review. New channels still require an allowlist release. A process restart with a newer Guide version requires a reviewed baseline; the current cache is process-local, not durable across restarts. This is a remaining gap against fully dynamic Guide operation.
+- The Guide directory is checked for scenario pages; none were present during this review. Newly added scenarios are read and held for applicability review rather than automatically interpreted. General prose rules are not executable configuration.
+- Original Slack source reactions now recognize both tpa: and slack: intake references.
+
+Documentation conflict: the brief's channel allowlist omits the HubSpot intake channel while requiring reviews in that channel's threads, and omits the previously authorized signal-summary channel. Existing explicitly requested thread replies and signal summaries are preserved; the Guide should document these exceptions. No new channel access or posting is authorized by this change.
+
+Current acceptance: local tests only. No deployment, live posts or queue replay. Existing cutover requirements remain.

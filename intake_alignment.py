@@ -90,6 +90,7 @@ def source_ref(event):
 def capture(notion, event, data=None):
     """Exact submission identity. Never merge separate requests solely by email."""
     refresh_guide(notion._req)
+    if _GUIDE_STATE.get('blocked'): raise ValueError(_GUIDE_STATE['reason'])
     ref = source_ref(event)
     hits = list(query(notion._req, INTAKE, {'or':[{'property':'Intake Ref','rich_text':{'equals':ref}},
             {'property':'Intake Ref','rich_text':{'equals':ref.replace('tpa:','slack:',1)}}]}))
@@ -142,6 +143,7 @@ def queue_handoff(notion, event):
 
 
 def intake_for(remote, r):
+    if _GUIDE_STATE.get('blocked'): raise ValueError(_GUIDE_STATE['reason'])
     if len(r['related']) != 1: raise ValueError('Specialist handoff requires exactly one intake record')
     p=remote.get(r['related'][0])
     if p.get('parent',{}).get('data_source_id') != INTAKE: raise ValueError('Unapproved intake source')
@@ -201,7 +203,7 @@ def sync_receipt(remote,r,d,permalink):
         if decision!='Declined': props['Intake Stage']={'select':{'name':'Routed Internally'}}
         remote.patch(page['id'],props)
     ref=value(page,'Intake Ref')
-    match=re.fullmatch(r'tpa:([A-Z0-9]+):(\d+\.\d+)',ref)
+    match=re.fullmatch(r'(?:tpa|slack):([A-Z0-9]+):(\d+\.\d+)',ref)
     if match:
         emoji='clock3' if decision=='Declined' else 'white_check_mark'
         for method,name in [('reactions.add',emoji),('reactions.remove','white_check_mark' if decision=='Declined' else 'clock3')]:
@@ -219,6 +221,7 @@ def build_recap(remote, now_utc, start):
     """Shared business state; include today's changes and older outstanding work once."""
     from zoneinfo import ZoneInfo
     now_utc=now_utc.replace(tzinfo=dt.timezone.utc) if now_utc.tzinfo is None else now_utc
+    refresh_guide(remote.notion)
     pages=list(query(remote.notion,INTAKE))
     deliveries=list(query(remote.notion,OUTBOX))
     by_intake={}
@@ -273,6 +276,7 @@ def build_recap(remote, now_utc, start):
     lines=['*Partner leads · '+now_utc.astimezone(ZoneInfo('America/Denver')).strftime('%a %b %d')+'*',
            '_Coverage: shared Partner Biz Dev and Outbox, including pipeline/Gmail intake. Includes earlier outstanding work._',
            'Sources: '+', '.join(html.escape(k)+': '+str(v) for k,v in sorted(sources.items()))]
+    lines.append(guide_summary(remote.notion, start))
     for name,entries in groups.items():
         if entries: lines.append('*'+name+' ('+str(len(entries))+')*\n\n'+'\n\n'.join(entries))
     if not any(groups.values()): lines.append('No recent or outstanding lead records.')
@@ -280,6 +284,7 @@ def build_recap(remote, now_utc, start):
 
 _GUIDE_CACHE = None
 _GUIDE_CHECKED = 0
+_GUIDE_STATE = {'degraded': True, 'reason': 'Runtime guide not yet read', 'reviewed': ''}
 
 
 def refresh_guide(req):
@@ -289,7 +294,7 @@ Known routes may change owners without code changes. New channels/rules require
 review. Last validated owners survive a temporary Notion outage in this process.
 """
     import time
-    global _GUIDE_CACHE, _GUIDE_CHECKED
+    global _GUIDE_CACHE, _GUIDE_CHECKED, GUIDE_VERSION
     if _GUIDE_CHECKED and time.monotonic()-_GUIDE_CHECKED < 900: return
     _GUIDE_CHECKED=time.monotonic()
     try:
@@ -307,7 +312,16 @@ review. Last validated owners survive a temporary Notion outage in this process.
         root=blocks('40fff732-fc34-810e-ac53-f085a6d47576')
         text='\n'.join(plain(b.get(b['type'],{}).get('rich_text',[])) for b in root)
         version=re.search(r'Guide version:\s*(\d{4}-\d{2}-\d{2}\.\d+)',text)
-        if not version or version[1]!=GUIDE_VERSION: raise ValueError('Guide version differs from reviewed implementation '+GUIDE_VERSION)
+        if not version: raise ValueError('Guide version missing')
+        if version[1] != GUIDE_VERSION:
+            if _GUIDE_CACHE is None or policy_fingerprint(root, blocks) != _GUIDE_STATE.get('policy'):
+                raise ValueError('Guide policy changed or has no validated baseline; release review required')
+        directory=blocks('40fff732-fc34-80f9-b488-cfafd7a7b257')
+        scenarios=[b for b in directory if b.get('type')=='child_page' and b['id'].replace('-','') not in ('40fff732fc34810eac53f085a6d47576','40fff732fc3481d6b394ca03b7149f6d')]
+        for scenario in scenarios:
+            blocks(scenario['id'])
+        if scenarios:
+            raise ValueError('New scenario pages require applicability/policy review: '+', '.join(b['id'] for b in scenarios))
         active=False; route_table=None
         for b in root:
             if b['type']=='heading_2': active=plain(b['heading_2']['rich_text']).startswith('5.')
@@ -326,11 +340,20 @@ review. Last validated owners survive a temporary Notion outage in this process.
             if not owners and name!='Affiliate Program': raise ValueError('Guide owner missing')
             validated[name]=(channel[0],owners)
         if set(validated)!=set(ROUTES): raise ValueError('Incomplete guide routes')
+        policy=policy_fingerprint(root, blocks)
+        if _GUIDE_CACHE is not None and policy != _GUIDE_STATE.get('policy'):
+            raise ValueError('Guide policy changed; release review required')
         ROUTES.update(validated);_GUIDE_CACHE=validated
+        GUIDE_VERSION=version[1]
+        _GUIDE_STATE['policy']=policy
+        _GUIDE_STATE.update(degraded=False, blocked=False, reason='')
         reviewed=re.search(r'Last reviewed:\s*(\d{4}-\d{2}-\d{2})',text)
+        _GUIDE_STATE['reviewed'] = reviewed[1] if reviewed else ''
         if reviewed and (dt.date.today()-dt.date.fromisoformat(reviewed[1])).days>14:
             audit(req,'guide-overdue:'+dt.date.today().isoformat(),'Reconciliation','DRIFT: Guide review overdue; section 14')
     except Exception as exc:
+        _GUIDE_STATE.update(degraded=True, reason=str(exc)[:200])
+        if isinstance(exc, ValueError): _GUIDE_STATE['blocked']=True
         # Record the degraded state; a missing log permission must not disappear.
         audit(req,'guide-read:'+dt.date.today().isoformat()+':'+str(exc)[:100], 'Reconciliation',
               'DRIFT: Guide read/validation unavailable; using last reviewed '+GUIDE_VERSION+'. '+str(exc)[:200])
@@ -365,3 +388,73 @@ def record_post(req, key, body, channel, ts, intake=None, kind='other'):
     page=req('POST','pages',{'parent':{'type':'data_source_id','data_source_id':OUTBOX},'properties':props})
     audit(req,key+':posted','Note','Slack message posted',intake=intake,outbox=page['id'],channel=channel,permalink=url)
     return page['id']
+
+
+def guide_summary(req, start):
+    """Report durable drift from both systems in the reporting window."""
+    stamp=dt.datetime.fromtimestamp(start,dt.timezone.utc).isoformat()
+    rows=query(req,ACTIVITY,{'and':[
+        {'property':'When','date':{'on_or_after':stamp}},
+        {'property':'Action','select':{'equals':'Reconciliation'}}]})
+    count=sum(value(p,'Detail').startswith('DRIFT:') for p in rows)
+    reviewed=_GUIDE_STATE['reviewed']
+    overdue=not reviewed or (dt.date.today()-dt.date.fromisoformat(reviewed)).days>14
+    return ('*Guide:* '+GUIDE_VERSION+' · '+str(count)+' drift events in this window · '+
+            ('review overdue / review date unavailable' if overdue else 'review current')+
+            (' · using last reviewed snapshot; '+html.escape(_GUIDE_STATE['reason']) if _GUIDE_STATE['degraded'] else ' · runtime read current'))
+
+
+def validate_owner_membership(remote, r):
+    """Resolve people and membership immediately before delivery; fail closed."""
+    route=value(remote.get(r['related'][0]),'Forward To')
+    if route=='Influencer/Creator': route='Affiliate Program'
+    owners=ROUTES.get(route,('',()))[1]
+    if not owners: return
+    members=set();cursor=''
+    for _ in range(30):
+        args={'channel':r['channel'],'limit':200}
+        if cursor: args['cursor']=cursor
+        result=remote.slack('conversations.members',args)
+        members.update(result.get('members',[]))
+        cursor=result.get('response_metadata',{}).get('next_cursor')
+        if not cursor: break
+    else: raise ValueError('Owner membership pagination incomplete')
+    for owner in owners:
+        user=remote.slack('users.info',{'user':owner}).get('user',{})
+        if user.get('id')!=owner or user.get('deleted') or user.get('is_bot') or owner not in members:
+            raise ValueError('Guide owner is inactive or not in the destination channel: '+owner)
+
+
+def drift(req, r, reason):
+    audit(req,r['id']+':drift:'+reason,'Reconciliation',
+          'DRIFT: section 5 / 14 - '+reason+' - reconcile guide, owner access or queued row before delivery',
+          intake=r['related'][0] if len(r['related'])==1 else None,outbox=r['id'],channel=r['channel'])
+
+
+def policy_fingerprint(root, blocks):
+    """Route-owner/version-only changes can refresh without accepting new prose rules.
+
+Exclude routing destinations, review dates and change logs; include all executable
+policy sections and status-table contents. A prose-policy change requires review.
+"""
+    selected=[]; section=0; routing_table=False
+    for b in root:
+        kind=b['type']; data=b.get(kind,{})
+        text=''.join(x.get('plain_text') or x.get('text',{}).get('content','') for x in data.get('rich_text',[]))
+        if kind=='heading_2':
+            m=re.match(r'(\d+)\.',text);section=int(m[1]) if m else 0
+            routing_table=False
+        if not 1<=section<=9: continue
+        if kind=='table' and section==5 and not routing_table:
+            routing_table=True;continue
+        if kind=='table':
+            for row in blocks(b['id']):
+                selected.append(row.get('table_row',{}).get('cells',[]))
+        else: selected.append(text)
+    # Plain strings only; ignore Notion-generated annotation/link metadata.
+    def clean(item):
+        if isinstance(item,str): return item
+        if isinstance(item,list): return [clean(x) for x in item]
+        return item.get('plain_text') or item.get('text',{}).get('content','')
+    import json
+    return hashlib.sha256(json.dumps(clean(selected),sort_keys=True).encode()).hexdigest()

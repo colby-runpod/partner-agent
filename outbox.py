@@ -374,7 +374,9 @@ class Outbox:
                         self.save(r['id'],ts=prior,state='sync')
                         self.sync(self.get(r['id']))
                     return
+                alignment.validate_owner_membership(self.remote,r)
             except Exception as exc:
+                alignment.drift(self.remote.notion,r,str(exc)[:300])
                 self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Handoff preflight failed: '+str(exc)[:300])});return
         try: message=payload(r)
         except ValueError as e:
