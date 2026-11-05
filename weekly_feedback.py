@@ -14,7 +14,7 @@ import uuid
 import outbox as o
 
 WEEKLY_SOURCE = '3c363142-e718-4f03-a6c9-cfa24783fbc0'
-AUTHORS = {o.COLBY: 'Colby Henderson', 'U0C6DH3UUV9': 'Tanya Chandy'}
+AUTHORS = {o.COLBY: 'Colby Henderson', 'U0C6DH3UUV9': 'Tanya Chandy', 'U0CE06U7K52': 'Zoe McKinley'}
 
 
 def enabled():

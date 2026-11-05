@@ -64,3 +64,10 @@ Compared with https://docs.google.com/document/d/16GnE_w248fLbEQZTn31qtAXh9hIpny
 Documentation conflict: the brief's channel allowlist omits the HubSpot intake channel while requiring reviews in that channel's threads, and omits the previously authorized signal-summary channel. Existing explicitly requested thread replies and signal summaries are preserved; the Guide should document these exceptions. No new channel access or posting is authorized by this change.
 
 Current acceptance: local tests only. No deployment, live posts or queue replay. Existing cutover requirements remain.
+
+
+## Guide v2026-11-05.4 reconciliation
+
+The Guide changed during the November 5 rollout. Version .3 added the Weekly Partnerships Update scenario; .4 allows the Friday input reminder to post through Colby's scheduled task. The AWS agent does not send that reminder or capture its ordinary replies. Weekly feedback remains bound to a delivered agent outbox review parent; adding Zoe to approved reviewers does not permit arbitrary Friday-thread capture or final publication.
+
+The runtime now recognizes and reads the reviewed weekly scenario, including when its page is nested in the Guide library callout. Unknown scenarios still require review. Current reviewed baseline is .4. New baseline and directory layout must pass runtime preflight before another rollout. No scheduled task or personal-account post is created by this release.
