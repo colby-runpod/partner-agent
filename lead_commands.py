@@ -10,14 +10,16 @@ import partner_sources as routes
 DESTINATIONS = {
     'supply': ('Supply Team', 'C0CAL8C08RK'),
     'events': ('Events/Sponsorship', 'C0CAKA6PW8K'),
-    'startup': ('VC/Incubator', routes.VC_CHANNEL),
+    'startup': ('Startup Program', routes.VC_CHANNEL),
+    'vc': ('VC/Incubator', routes.VC_CHANNEL),
+    'marketing': ('Marketing', 'C0CAKA6PW8K'),
     'research': ('Research/University', routes.RESEARCH_CHANNEL),
     'affiliate': ('Affiliate Program', routes.AFFILIATE_CHANNEL),
 }
 ALIASES = {'supply':'supply','supply leads':'supply','feed-partner-supply-leads':'supply',
     'event':'events','events':'events','event leads':'events','events leads':'events',
     'feed-partner-event-requests':'events','startup':'startup','startup leads':'startup',
-    'vc':'startup','vc/incubator':'startup','feed-partner-startup-leads':'startup',
+    'vc':'vc','vc/incubator':'vc','incubator':'vc','marketing':'marketing','feed-partner-startup-leads':'startup',
     'research':'research','research/edu':'research','research leads':'research',
     'research/edu leads':'research','feed-partner-research-edu-leads':'research',
     'affiliate':'affiliate','affiliate leads':'affiliate','feed-partner-affiliate-creator-leads':'affiliate'}
@@ -81,9 +83,15 @@ def append_activity(notion,page_id,marker,text):
         if not cursor:raise ValueError('Incomplete activity history')
     else:raise ValueError('Activity history exceeds bound')
     notion._req('PATCH','blocks/'+page_id+'/children',{'children':[paragraph(marker+'\n'+text)]})
+    if routes.alignment.enabled():
+        routes.alignment.audit(notion._req,marker,'Note',text[:1700],intake=page_id)
 
 
 def ensure_record(notion,ledger,row,data):
+    if routes.alignment.enabled():
+        page=routes.alignment.capture(notion,dict(channel=row['channel'],ts=row['ts']),data)
+        ledger.mark(row['key'],notion_id=page['id'],notion_url=page['url'])
+        return page['url'],page['id']
     if row.get('notion_id') and row.get('notion_url'):return row['notion_url'],row['notion_id']
     ref='tpa:%s:%s'%(row['channel'],row['ts'])
     # Exact source first, then a unique email match. Never pick an arbitrary first row.
@@ -147,7 +155,7 @@ def process(store,job,clients,ledger,cfg,notion):
                     result=delivered.get('result_url') if delivered.get('ref') else None
                     receipt.update(delivery_url=result or '',delivery_state='delivered' if result else 'unconfirmed')
                     store.update(key,ref=json.dumps(receipt),result_url=result or '')
-                    outcome=('Already delivered' if already else 'Delivered')+' to '+target+': '+result if result else 'Slack delivery unconfirmed; held for reconciliation. Do not resend.'
+                    outcome=('Already delivered' if already else 'Delivered')+' to '+target+': '+result if result else ('Queued for delivery through the shared outbox.' if routes.alignment.enabled() and not delivered.get('error') else 'Slack delivery unconfirmed; held for reconciliation. Do not resend.')
                     append_activity(notion,page_id,key+':result',outcome+'\nRecorded at: '+dt.datetime.now(dt.timezone.utc).isoformat()+'\nRequest: '+link(event))
                     reply=(('Already forwarded' if already else 'Forwarded')+' to '+target+' for team validation: <'+result+'|Open handoff>.' if result else outcome)
                     reply+=' Original score and warnings retained. Activity logged: <'+url+'|Notion Biz Dev record>.'

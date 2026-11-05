@@ -29,6 +29,19 @@ def sync_row(row, receipts):
     if row['channel'] != CHANNEL or source.get('synthetic_test'):
         return True
     status = review.summary_action(row, receipts)[0]
+    import intake_alignment as alignment
+    if alignment.enabled():
+        import outbox
+        remote=outbox.Remote()
+        matches=list(alignment.query(remote.notion,alignment.INTAKE,{'property':'Intake Ref','rich_text':{'equals':'tpa:'+row['channel']+':'+row['ts']}}))
+        if len(matches)!=1: return False
+        page=matches[0]
+        notes=alignment.value(page,'Next Step Notes')+' '+alignment.value(page,'Draft / Resource')
+        entries=list(alignment.query(remote.notion,alignment.OUTBOX,{'property':'Related Intake','relation':{'contains':page['id']}}))
+        status='needs_action'
+        if alignment.value(page,'Status')=='Closed': status='actioned'
+        elif 'Parked by Colby' in notes: status='parked'
+        elif alignment.value(page,'Status') not in ('Flagged','In Review') and any(alignment.value(p,'Status') in ('Posted','Confirmed') and alignment.value(p,'Message TS') and alignment.value(p,'Permalink') and alignment.value(p,'Channel ID') in alignment.SPECIALIST_CHANNELS for p in entries): status='actioned'
     icon = {'actioned': 'white_check_mark', 'parked': 'double_vertical_bar', 'needs_action': 'clock3'}[status]
     ok = True
     for ts in dict.fromkeys(filter(None, (source.get('thread_ts') or row['ts'], row.get('card_ts')))):

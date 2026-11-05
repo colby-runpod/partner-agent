@@ -70,3 +70,11 @@ class Drafts(unittest.TestCase):
         text=d.render(dict(to='a@example.test',subject="Let's talk",body="You're welcome. <@U123>"))
         self.assertIn("Let's talk",text);self.assertIn("You're welcome",text)
         self.assertNotIn('&#x27;',text);self.assertNotIn('<@U123>',text)
+
+class SignupTemplate(unittest.TestCase):
+    def test_current_invitation_and_saved_link_repair(self):
+        self.assertIn(d.PARTNER_SIGNUP_URL,review.INVITE)
+        self.assertNotIn('3e3ff732fc3480099620c16f48c09145',review.INVITE)
+        old='Apply: https://app.notion.com/p/3e3ff732fc3480099620c16f48c09145?source=copy_link'
+        self.assertEqual(d.current_signup_link(old),'Apply: '+d.PARTNER_SIGNUP_URL)
+        self.assertIn(d.PARTNER_SIGNUP_URL,d.SYSTEM)

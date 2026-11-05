@@ -487,7 +487,7 @@ class DraftTests(unittest.TestCase):
     def test_invite_for_pursue_four(self):
         (label, text), = review.drafts(self.make(), 'demo@example.com', SUBMITTED)
         self.assertIn('partners@runpod.io', label)
-        self.assertIn('invite Example to apply', text); self.assertTrue(text.startswith('Hi Demo,'))
+        self.assertIn('invite you to complete your partner signup', text); self.assertTrue(text.startswith('Hi Demo,'))
 
     def test_pointer_for_self_serve(self):
         (label, text), = review.drafts(self.make(route='Startup Program', checks=dict(GOOD['checks'], fit={'verdict': 'partial'})),

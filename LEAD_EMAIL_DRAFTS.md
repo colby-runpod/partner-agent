@@ -15,3 +15,7 @@ Draft text is escaped for Slack. The model receives verified source-thread conte
 Existing Gmail Draft ID or a pending draft request prevents a second request. An interrupted external write is held for reconciliation rather than automatically repeated. Revisions made after a Gmail request do not automatically replace that request or existing Gmail draft. Review the existing record before requesting another.
 
 No Gmail OAuth change or database migration is required. Slack drafts are retained in the durable job receipt and conversation; Notion is written only on an explicit Gmail request. This release does not add a Save button: the explicit mention command performs the handoff.
+
+## Current partner signup invitation
+
+November 3 update: invite eligible partners to https://www.suger.io/partner-signup/8a0b9ce8-c25c-4ffb-b5f2-2157e4b1373d. The invitation describes application review, not approval. Both fixed and conversational drafts use this link; the known retired Notion URL is replaced when an older saved draft is handed to Gmail. Gmail must use partners@runpod.io and the partners@ signature exactly once, with saved-draft sender/signature verification. The sample team sign-off is removed before signature insertion. Draft-only controls remain unchanged; no email is automatically sent.

@@ -1,4 +1,5 @@
 """Explicit, reviewable email drafts. Gmail creation is a queued human-requested handoff."""
+import intake_alignment as alignment
 import html
 import json
 import os
@@ -6,6 +7,12 @@ import re
 import lead_qa
 import lead_commands
 import question_progress
+
+PARTNER_SIGNUP_URL = 'https://www.suger.io/partner-signup/8a0b9ce8-c25c-4ffb-b5f2-2157e4b1373d'
+
+def current_signup_link(text):
+    # Also repair the known retired form in drafts saved before this release.
+    return re.sub(r'https://(?:app\.notion\.com/p/|www\.notion\.so/|notion\.so/)3e3ff732fc3480099620c16f48c09145(?:\?[^\s<>]*)?', PARTNER_SIGNUP_URL, text)
 
 SYSTEM='''Draft a concise, casual professional email for Colby at Runpod using only this lead's
 submission, saved review, conversation and latest draft. The latest human request defines the
@@ -26,6 +33,8 @@ Aim for 100-180 words, subject under 160 characters and body under 5000 characte
 If the objective is vague, write a neutral acknowledgment appropriate to the actual commercial
 ask, without inventing a commitment or reflexively demanding a long list of information.'''
 
+
+SYSTEM += '\nFor a Runpod partner signup invitation, use only this current signup URL: '+PARTNER_SIGNUP_URL+'. Never use the retired Notion application form. Signup is an application, not approval. The Gmail workflow uses partners@runpod.io and adds the partners@ signature; do not add a signature yourself.'
 
 def intent(text):
     t=text.strip().lower()
@@ -76,6 +85,7 @@ def generate(event,sources,previous,clients):
     if not isinstance(body,str) or not 1<=len(body.strip())<=5000:raise ValueError('Invalid body')
     if re.search(r'(?:weekdays?|weekends?).{0,45}(?:work for (?:us|me)|both work|available)|(?:we|i)(?: are| am| can|\x27re).{0,35}(?:available|meet|call).{0,30}(?:weekends?|weekdays?)',body,re.I):
         raise ValueError('Unverified scheduling availability')
+    body=current_signup_link(body)
     body=re.sub(r'\n(?:Thanks(?: again)?|Best(?: regards)?|Regards|Sincerely|Cheers),?\s*\nColby(?: Henderson)?\s*$','',body,flags=re.I).rstrip()
     body=re.sub(r'\nColby(?: Henderson)?\s*$','',body,flags=re.I).rstrip()
     def clean(s):return re.sub(r'runpod','Runpod',s,flags=re.I).replace(' — ','-').replace('—','-').replace(' - ','-').strip()
@@ -98,6 +108,16 @@ def process(store,job,clients,ledger,cfg,notion=None):
             previous=latest(store,e)
             if e['action']=='send':
                 reply='I can draft the email or request a Gmail draft, but cannot send email. Review and send it from Gmail.'
+            elif alignment.enabled():
+                if not cfg.get('notion_write') or notion is None: raise ValueError('Notion unavailable')
+                row=ledger.find(channel=e['channel'],thread_ts=e['thread_ts'])
+                if not row: raise ValueError('No saved lead')
+                data=json.loads(row['data'])
+                store.update(key,state='writing')
+                url,page=lead_commands.ensure_record(notion,ledger,row,data)
+                alignment.request_pipeline(notion,page,key,e['question'],lead_commands.link(e))
+                store.update(key,ref=json.dumps(dict(notion_url=url,status='requested')))
+                reply='Recorded for the scheduled pipeline: <'+url+'|Notion request>. No Gmail draft or email send is confirmed. Drafts requiring partners@runpod.io stay blocked until the sender and partners@ signature can be set.'
             elif e['action']=='gmail':
                 if not previous:raise ValueError('No prior draft')
                 if not cfg.get('notion_write') or notion is None:raise ValueError('Notion unavailable')
