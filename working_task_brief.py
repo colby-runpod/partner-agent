@@ -65,19 +65,22 @@ def _parse_time(value):
     return parsed.astimezone(dt.timezone.utc)
 
 
-def config(cfg):
-    cfg['working_task_brief_enabled'] = os.environ.get('WORKING_TASK_BRIEF_ENABLED') == 'true'
-    cfg['working_task_brief_channel'] = os.environ.get('WORKING_TASK_BRIEF_CHANNEL_ID', 'C0C7HG8KYFL')
-    cfg['working_task_brief_hour'] = int(os.environ.get('WORKING_TASK_BRIEF_HOUR', '8'))
-    cfg['working_task_brief_minute'] = int(os.environ.get('WORKING_TASK_BRIEF_MINUTE', '15'))
-    cfg['working_task_brief_max_age_hours'] = float(os.environ.get('WORKING_TASK_BRIEF_MAX_AGE_HOURS', '3'))
-    cfg['working_task_run_log'] = os.environ.get('WORKING_TASK_RUN_LOG_ID', '8d12b4ca-c723-4372-827c-d607070179a2')
-    cfg['working_tasks_source'] = os.environ.get('WORKING_TASKS_DATA_SOURCE_ID', 'e77648f6-502d-450f-8b79-4dd2ced52bab')
+def config(cfg, prefix='', env=None):
+    """Load briefing settings under a runtime-specific environment prefix."""
+    env = env or os.environ
+    name = lambda key: prefix + 'WORKING_TASK_BRIEF_' + key
+    cfg['working_task_brief_enabled'] = env.get(name('ENABLED')) == 'true'
+    cfg['working_task_brief_channel'] = env.get(name('CHANNEL_ID'), 'C0C7HG8KYFL')
+    cfg['working_task_brief_hour'] = int(env.get(name('HOUR'), '8'))
+    cfg['working_task_brief_minute'] = int(env.get(name('MINUTE'), '15'))
+    cfg['working_task_brief_max_age_hours'] = float(env.get(name('MAX_AGE_HOURS'), '3'))
+    cfg['working_task_run_log'] = env.get(name('RUN_LOG_ID'), '8d12b4ca-c723-4372-827c-d607070179a2')
+    cfg['working_tasks_source'] = env.get(name('TASKS_DATA_SOURCE_ID'), 'e77648f6-502d-450f-8b79-4dd2ced52bab')
     if not (0 <= cfg['working_task_brief_hour'] <= 23 and 0 <= cfg['working_task_brief_minute'] <= 59):
         raise ValueError('Working Task briefing time is invalid')
     if cfg['working_task_brief_max_age_hours'] <= 0:
-        raise ValueError('WORKING_TASK_BRIEF_MAX_AGE_HOURS must be positive')
-    if cfg['working_task_brief_enabled'] and not os.environ.get('NOTION_TOKEN'):
+        raise ValueError(name('MAX_AGE_HOURS') + ' must be positive')
+    if cfg['working_task_brief_enabled'] and not env.get('NOTION_TOKEN'):
         raise ValueError('Working Task briefing requires NOTION_TOKEN')
     return cfg
 

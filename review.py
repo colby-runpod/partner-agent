@@ -60,7 +60,6 @@ import outbox
 import screening
 import chat
 import tasks
-import working_task_brief
 from intake import Application, Store, api, flatten, verify
 
 DIGEST_MARKERS = ('PARTNERSHIP MQL DIGEST', 'Incoming Partnership Request')
@@ -281,7 +280,6 @@ def config():
     cfg['notion_intake'] = os.environ.get('REVIEW_NOTION_INTAKE_ID', 'ffecfb43-625c-42c6-a6af-1f8951641bba')
     cfg['notion_apps'] = os.environ.get('REVIEW_NOTION_APPS_ID', '3e3ff732-fc34-807e-8b49-000bf49490ca')
     cfg['notion_lookup'] = bool(os.environ.get('NOTION_TOKEN'))
-    working_task_brief.config(cfg)
     if cfg['review_mode'] not in ('shadow', 'thread'):
         raise ValueError('REVIEW_MODE must be shadow or thread')
     if not 0 <= cfg['summary_hour'] <= 23:
@@ -387,7 +385,7 @@ def accept_feedback(body, cfg):
 
 
 def accept(body, cfg):
-    event = working_task_brief.accept_feedback(body, cfg) or lead_completion.accept(body, cfg) or lead_drafts.accept(body, cfg) or lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or lead_qa.accept(body, cfg) or tasks.accept_task(body, cfg) or \
+    event = lead_completion.accept(body, cfg) or lead_drafts.accept(body, cfg) or lead_commands.accept(body, cfg) or partner_sources.accept_forward(body, cfg) or outbox.accept(body, cfg) or accept_manual(body, cfg) or accept_feedback(body, cfg) or lead_qa.accept(body, cfg) or tasks.accept_task(body, cfg) or \
         assistant.accept_agent(body, cfg)
     if event:
         return event
@@ -408,10 +406,6 @@ def create_app():
                                'review_enabled': cfg['review_enabled'], 'review_mode': cfg['review_mode'],
                                'web_search': cfg['web_search'], 'notion_lookup': cfg['notion_lookup'],
                                'summary_enabled': cfg['summary_enabled'], 'summary_hour': cfg['summary_hour'],
-                               'working_task_brief_enabled': cfg.get('working_task_brief_enabled', False),
-                               'working_task_brief_channel': cfg.get('working_task_brief_channel'),
-                               'working_task_brief_time': '%02d:%02d Mountain' % (
-                                   cfg.get('working_task_brief_hour', 8), cfg.get('working_task_brief_minute', 15)),
                                'interactive': cfg.get('interactive', False),
                                'notion_write': cfg.get('notion_write', False),
                                'tasks_enabled': cfg.get('tasks_enabled', False),
@@ -970,31 +964,6 @@ class ReviewClients:
     def say(self, channel, text):
         return api('https://slack.com/api/chat.postMessage', os.environ['SLACK_BOT_TOKEN'],
             {'channel': channel, 'text': text, 'parse': 'none', 'unfurl_links': False, 'unfurl_media': False}).get('ts')
-
-    def slack_preflight(self, channel):
-        """Confirm identity, channel read access and the configured post scope without writing."""
-        token = os.environ['SLACK_BOT_TOKEN']
-        request = urllib.request.Request('https://slack.com/api/auth.test', headers={
-            'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
-        try:
-            with urllib.request.urlopen(request, timeout=25) as response:
-                auth = json.load(response)
-                scopes = {scope.strip() for scope in response.headers.get('X-OAuth-Scopes', '').split(',') if scope.strip()}
-        except (OSError, ValueError):
-            raise ValueError('Slack identity verification failed') from None
-        if auth.get('ok') is False:
-            raise ValueError('Slack identity verification failed')
-        if not auth.get('user_id'):
-            raise ValueError('Slack identity verification failed')
-        info_params = urllib.parse.urlencode({'channel': channel})
-        info = api('https://slack.com/api/conversations.info?' + info_params, token)
-        if (info.get('channel') or {}).get('id') != channel:
-            raise ValueError('Slack channel read verification failed')
-        history_params = urllib.parse.urlencode({'channel': channel, 'limit': 1})
-        api('https://slack.com/api/conversations.history?' + history_params, token)
-        if 'chat:write' not in scopes:
-            raise ValueError('Slack chat:write scope is not verified')
-        return True
 
     def post(self, event, text, buttons=None):
         token = os.environ['SLACK_BOT_TOKEN']
@@ -1772,7 +1741,6 @@ def worker():
             if not job:
                 if cfg['review_enabled']:
                     run_summary(cfg, ledger, review_clients, store=store)
-                working_task_brief.run(cfg, ledger, review_clients)
                 time.sleep(0.5)
             elif json.loads(job['payload']).get('kind') in ('outbox_event', 'outbox_action', 'weekly_feedback'):
                 try:
@@ -1804,8 +1772,6 @@ def worker():
                 process(store, job, review_clients, ledger, cfg)
             elif json.loads(job['payload']).get('kind') == 'feedback':
                 process_feedback(store, job, review_clients, ledger)
-            elif json.loads(job['payload']).get('kind') == 'working_task_feedback':
-                working_task_brief.capture(store, job, ledger)
             elif json.loads(job['payload']).get('kind') == 'action':
                 process_action(store, job, review_clients, ledger, cfg, notion)
             elif json.loads(job['payload']).get('kind') == 'task':

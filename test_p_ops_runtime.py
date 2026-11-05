@@ -3,11 +3,14 @@ import datetime as dt
 import io
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 import urllib.parse
+from unittest.mock import patch
 
-from p_ops_runtime import Dashboard, RuntimeApp, _csrf, components, config, run_once
+from p_ops_runtime import (Dashboard, PARTNER_OPS_APP_ID, RuntimeApp, RuntimeState,
+                           _csrf, components, config, run_once)
 from p_ops_triage import TriageDecision
 
 
@@ -147,7 +150,7 @@ class RuntimeTests(unittest.TestCase):
         status, _, settings = request(self.app, "/settings")
         self.assertEqual("200 OK", status)
         self.assertIn(b"<h1>Settings</h1>", settings)
-        self.assertIn(b"Change these in Railway", settings)
+        self.assertIn(b"Change these in AWS", settings)
 
     def test_test_lab_is_authenticated_and_validates_corpus_without_external_action(self):
         self.assertEqual("401 Unauthorized", request(self.app, "/test-lab", auth=False)[0])
@@ -238,6 +241,37 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(data["p_ops_enabled"])
         self.assertFalse(data["triage_shadow_enabled"])
         self.assertNotIn("password", data)
+
+    def test_working_task_brief_requires_partner_ops_slack_app(self):
+        env = {"P_OPS_ENABLED": "true", "P_OPS_REVIEW_USER": "colby",
+               "P_OPS_REVIEW_PASSWORD": "password", "P_OPS_CSRF_SECRET": "csrf",
+               "P_OPS_WORKING_TASK_BRIEF_ENABLED": "true",
+               "P_OPS_WORKING_TASK_FEEDBACK_USER_IDS": "U1", "NOTION_TOKEN": "notion",
+               "SLACK_SIGNING_SECRET": "secret", "SLACK_TEAM_ID": "T1",
+               "SLACK_APP_ID": "A0C76FQTM62", "SLACK_BOT_TOKEN": "xoxb-intake"}
+        with self.assertRaisesRegex(ValueError, "partner-ops Slack app"):
+            config(env)
+        env["SLACK_APP_ID"] = PARTNER_OPS_APP_ID
+        self.assertTrue(config(env)["working_task_brief_enabled"])
+
+    def test_partner_ops_captures_brief_feedback_for_reconciliation(self):
+        cfg = dict(self.cfg, app_id=PARTNER_OPS_APP_ID, team_id="T1",
+                   working_task_brief_enabled=True, working_task_brief_channel="C1",
+                   feedback_users={"U1"})
+        app = RuntimeApp(cfg, self.dashboard, FakeSlackApp())
+        RuntimeState(cfg["db"]).put("working_task_brief_state", json.dumps({
+            "kind": "brief", "receipt": "100.200"}))
+        body = json.dumps({"event_id": "EvBrief", "team_id": "T1",
+            "api_app_id": PARTNER_OPS_APP_ID, "type": "event_callback", "event": {
+                "type": "message", "channel": "C1", "thread_ts": "100.200",
+                "ts": "101.300", "user": "U1", "text": "focus WI-123 today"}}).encode()
+        with patch("p_ops_runtime.verify", return_value=True):
+            status, _, _ = request(app, "/slack/events", "POST", body, auth=False)
+        self.assertEqual("200 OK", status)
+        with sqlite3.connect(cfg["db"]) as db:
+            row = db.execute("SELECT state,payload FROM p_ops_working_task_feedback").fetchone()
+        self.assertEqual("captured_for_reconciliation", row[0])
+        self.assertEqual("WI-123", json.loads(row[1])["command"]["wi_id"])
 
     def test_interactive_review_requires_all_safety_prerequisites(self):
         env = {"P_OPS_ENABLED": "true", "P_OPS_REVIEW_USER": "colby",

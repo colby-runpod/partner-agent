@@ -10,6 +10,14 @@ class DeploymentTests(unittest.TestCase):
     def test_active_runtime_modules_are_copied_into_image(self):
         dockerfile = Path(__file__).with_name('Dockerfile').read_text()
         self.assertIn('review.py working_task_brief.py tasks.py', dockerfile)
+        self.assertIn('p_ops_runtime.py p_ops_service.py', dockerfile)
+
+    def test_working_task_brief_is_owned_only_by_partner_ops(self):
+        review = Path(__file__).with_name('review.py').read_text()
+        p_ops = Path(__file__).with_name('p_ops_runtime.py').read_text()
+        self.assertNotIn('working_task_brief.run', review)
+        self.assertIn('working_task_brief.run', p_ops)
+        self.assertIn('PARTNER_OPS_APP_ID = "A0CA2C43D4L"', p_ops)
 
     def exercise(self, health, secrets=None):
         image = 'example@sha256:abc'

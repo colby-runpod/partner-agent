@@ -2,7 +2,7 @@
 
 ## Current state
 
-The standalone runtime is implemented, locally tested, and deployed as a separate Railway service. Its dashboard and health endpoint are live. Slack capture, shadow triage, review posting, interactivity, and external write gates remain independently controlled, so deployment alone does not authorize them. It does not alter the existing Runpod Slack chat service.
+The standalone runtime is implemented and locally tested. Its former Railway deployment is historical. The next release is a dedicated AWS ECS service using the `partner-ops` Slack app (`A0CA2C43D4L`). It must not reuse the `int-partner-agent` app, bot token, signing secret, task definition, or service identity. Slack capture, shadow triage, review posting, interactivity, the Working Task briefing, and external write gates remain independently controlled, so deployment alone does not authorize them.
 
 The structured triage engine and its 25-case evaluation harness are implemented. The runtime connection is read-only and remains disabled unless `P_OPS_TRIAGE_SHADOW_ENABLED=true`; every result is non-executable. Historical reconciliation currently contains 15 verified cases, one partial case, and two cases blocked because the connected Slack app cannot read the separate `runpod-team` workspace channels. These cases are useful calibration evidence but are not yet a release gate until the partial and blocked cases are resolved and a live model run passes.
 
@@ -21,15 +21,31 @@ The runtime provides:
 1. Deploy this as a new service. Do not replace the current Slack chat service.
 2. Use persistent storage mounted at `/data`. Run one web process and one worker only. SQLite is not suitable for multiple hosts or worker replicas.
 3. Put the service behind HTTPS. Set strong, randomly generated review credentials and a separate CSRF secret.
-4. Copy `p_ops.env.example` into the host secret configuration. Never commit populated credentials.
-5. Set `P_OPS_ENABLED=true` to start the standalone runtime, but leave every capture and write gate false. Start with `python p_ops_service.py` and verify `/healthz` and authenticated `/review`.
+4. Copy `p_ops.env.example` into the AWS task configuration. Store populated credentials in Secrets Manager, never in the task definition or Git.
+5. Create a separate ECS service with command `python p_ops_service.py`. Set `P_OPS_ENABLED=true`, but leave capture, briefing, review-posting and write gates false. Verify `/healthz` and authenticated `/review` before enabling a Slack event source.
 6. Configure a dedicated Slack app or approved event-routing layer to send `reaction_added` events to `/slack/events`. Grant only the history and reaction scopes required to resolve allowlisted messages.
 7. Set the exact Runpod workspace, app, Colby user, and allowed channel IDs. Enable only `P_OPS_ENABLED` and `P_OPS_CAPTURE_ENABLED` for the first test.
 8. React to one non-sensitive test message. Confirm one capture and one task proposal appear in `/review`. Replaying the event or removing and re-adding the reaction must not create another proposal.
 9. Add a least-privilege Notion integration. Enable `P_OPS_NOTION_CREATE` only after reviewing the exact Inbox proposal. Confirm one task, its source link, and its `Review Required` state.
 10. Enable the daily preview separately. Review its proposed changes before enabling `P_OPS_NOTION_WRITE`.
-11. Connect Linear with least privilege. Keep creation review-required during the pilot.
-12. Enable outbound messages last. Email delivery is not implemented in this runtime. Slack drafts require exact-content approval and a second send-authorization action.
+11. Verify the dedicated `partner-ops` Slack identity and enable the Working Task briefing separately. Validate the first natural brief or hold receipt before calling it live.
+12. Connect Linear with least privilege. Keep creation review-required during the pilot.
+13. Enable outbound messages last. Email delivery is not implemented in this runtime. Slack drafts require exact-content approval and a second send-authorization action.
+
+## Slack identity boundary
+
+The AWS p-OPS service must use:
+
+- `SLACK_APP_ID=A0CA2C43D4L` (`partner-ops`)
+- The dedicated `partner-ops` bot token and signing secret from Secrets Manager
+- The Runpod workspace team ID
+- `#ask-partners` membership and only the approved OAuth scopes
+
+Configuration rejects the Working Task briefing when `SLACK_APP_ID` is not the `partner-ops` app. The existing Team Partner Agent ECS service continues using `int-partner-agent` and does not run or accept Working Task briefing traffic.
+
+## Working Task briefing
+
+The dedicated p-OPS worker owns the weekday 8:15 AM Mountain schedule. Keep `P_OPS_WORKING_TASK_BRIEF_ENABLED=false` through the first AWS health deployment. After Slack identity, channel access, Notion access and the integrity snapshot are verified, enable the briefing and validate the first natural brief or hold receipt.
 
 ## Internal review notifications
 

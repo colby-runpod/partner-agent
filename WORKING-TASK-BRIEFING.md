@@ -1,9 +1,11 @@
 # AWS Working Task briefing
 
-This feature runs inside the existing active ECS service. It does not use
-Railway and it does not require a separate EventBridge schedule. The queue
-worker checks the Mountain-time schedule and uses the PostgreSQL review ledger
-to ensure that only one brief or hold notice is attempted per weekday.
+This feature runs only inside a dedicated AWS p-OPS ECS service using the
+`partner-ops` Slack app (`A0CA2C43D4L`). It does not run in the existing Team
+Partner Agent service and must not use `int-partner-agent` credentials. It does
+not use Railway or require a separate EventBridge schedule. The p-OPS worker
+checks the Mountain-time schedule and uses its durable runtime state to ensure
+that only one brief or hold notice is attempted per weekday.
 
 ## Source contract
 
@@ -29,20 +31,22 @@ task changed after the snapshot.
 
 ## ECS settings
 
-Add these environment values to the active ECS task definition:
+Add these environment values to the dedicated p-OPS ECS task definition:
 
 ```text
-WORKING_TASK_BRIEF_ENABLED=true
-WORKING_TASK_BRIEF_CHANNEL_ID=C0C7HG8KYFL
-WORKING_TASK_BRIEF_HOUR=8
-WORKING_TASK_BRIEF_MINUTE=15
-WORKING_TASK_BRIEF_MAX_AGE_HOURS=3
-WORKING_TASK_RUN_LOG_ID=8d12b4ca-c723-4372-827c-d607070179a2
-WORKING_TASKS_DATA_SOURCE_ID=e77648f6-502d-450f-8b79-4dd2ced52bab
+P_OPS_WORKING_TASK_BRIEF_ENABLED=true
+P_OPS_WORKING_TASK_BRIEF_CHANNEL_ID=C0C7HG8KYFL
+P_OPS_WORKING_TASK_BRIEF_HOUR=8
+P_OPS_WORKING_TASK_BRIEF_MINUTE=15
+P_OPS_WORKING_TASK_BRIEF_MAX_AGE_HOURS=3
+P_OPS_WORKING_TASK_BRIEF_RUN_LOG_ID=8d12b4ca-c723-4372-827c-d607070179a2
+P_OPS_WORKING_TASK_BRIEF_TASKS_DATA_SOURCE_ID=e77648f6-502d-450f-8b79-4dd2ced52bab
+P_OPS_WORKING_TASK_FEEDBACK_USER_IDS=<approved Slack user IDs>
 ```
 
-The existing `NOTION_TOKEN` and `SLACK_BOT_TOKEN` secrets are reused. Do not
-copy either secret into plain environment variables.
+Use the existing approved Notion integration and dedicated `partner-ops` Slack
+secrets. Do not reuse the `int-partner-agent` Slack secrets or copy any secret
+into plain environment variables.
 
 ## Delivery gates
 
@@ -72,14 +76,16 @@ only reconciliation writer.
 ## Rollout
 
 1. Merge and deploy the image with the feature disabled.
-2. Verify `/healthz` on the new ECS revision.
-3. Add the environment values above and deploy canary.
-4. Confirm the health response shows the channel and `08:15 Mountain` setting.
-5. Run a dry test against a copied run row or with an injected test client. Do
+2. Deploy a separate p-OPS ECS service using `python p_ops_service.py` and the
+   `partner-ops` Slack credentials, with briefing and write gates disabled.
+3. Verify `/healthz` reports `slack_app_id=A0CA2C43D4L` on the new service.
+4. Add the environment values above and deploy canary.
+5. Confirm the health response shows the channel and `08:15 Mountain` setting.
+6. Run a dry test against a copied run row or with an injected test client. Do
    not post a production test message.
-6. Let the next integrity review populate `Briefing Snapshot`.
-7. Verify the first natural 8:15 post or hold notice and its saved receipt.
-8. Keep the legacy local Slack briefing automation paused.
+7. Let the next integrity review populate `Briefing Snapshot`.
+8. Verify the first natural 8:15 post or hold notice and its saved receipt.
+9. Keep the legacy local Slack briefing automation paused.
 
 Do not mark this capability live until the deployed task revision, health check,
 first post receipt, and Notion source contract have all been verified.
