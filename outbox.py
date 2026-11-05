@@ -151,7 +151,8 @@ class Remote:
             raise Rejected(re.sub(r'[^a-zA-Z0-9_]', '', str(result.get('error','slack_error')))[:100])
         return result
     def slack(self, method, data):
-        if method == 'chat.getPermalink':
+        if method in ('chat.getPermalink', 'users.info', 'conversations.members',
+                      'conversations.history', 'conversations.replies', 'conversations.info'):
             return self.call('https://slack.com/api/', method+'?'+urllib.parse.urlencode(data),
                              'GET',None,os.environ['SLACK_BOT_TOKEN'])
         return self.call('https://slack.com/api/',method,'POST',data,os.environ['SLACK_BOT_TOKEN'])
