@@ -71,3 +71,8 @@ Current acceptance: local tests only. No deployment, live posts or queue replay.
 The Guide changed during the November 5 rollout. Version .3 added the Weekly Partnerships Update scenario; .4 allows the Friday input reminder to post through Colby's scheduled task. The AWS agent does not send that reminder or capture its ordinary replies. Weekly feedback remains bound to a delivered agent outbox review parent; adding Zoe to approved reviewers does not permit arbitrary Friday-thread capture or final publication.
 
 The runtime now recognizes and reads the reviewed weekly scenario, including when its page is nested in the Guide library callout. Unknown scenarios still require review. Current reviewed baseline is .4. New baseline and directory layout must pass runtime preflight before another rollout. No scheduled task or personal-account post is created by this release.
+
+
+## Guide v2026-11-05.5 reconciliation
+
+Rule 8 assigns replies for channel-routed leads to the receiving team. Automatic review cards no longer generate email drafts for specialist routes when alignment is enabled. Explicit Colby draft requests still delegate to the pipeline and state that exception. No automatic affiliate pointer emails are requested. Sales and Partnerships behavior is unchanged. The external pipeline must apply the same rule; the AWS agent cannot cancel or rewrite its independently created Gmail drafts.
