@@ -290,7 +290,7 @@ review. Last validated owners survive a temporary Notion outage in this process.
 """
     import time
     global _GUIDE_CACHE, _GUIDE_CHECKED
-    if time.monotonic()-_GUIDE_CHECKED < 900: return
+    if _GUIDE_CHECKED and time.monotonic()-_GUIDE_CHECKED < 900: return
     _GUIDE_CHECKED=time.monotonic()
     try:
         def blocks(id):
