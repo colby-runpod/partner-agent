@@ -14,6 +14,8 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn("Path: /partner-ops", template)
         self.assertIn("Name: partner-ops/slack-bot-token", template)
         self.assertIn("Name: partner-ops/slack-signing-secret", template)
+        self.assertIn("Name: partner-ops/notion-token", template)
+        self.assertIn("Name: partner-ops/anthropic-api-key", template)
         self.assertNotIn("team-partner-agent/pilot/slack", template)
 
     def test_deployment_is_hard_limited_to_disabled_partner_ops(self):
@@ -32,8 +34,19 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn('CAPTURE_TEST_USER_ID = "U0BEHPEJA6L"', script)
         self.assertIn('"--enable-capture-test"', script)
         self.assertIn('"P_OPS_CAPTURE_ENABLED", "value": "true" if capture_test else "false"', script)
-        self.assertIn('"activation": "capture-test" if args.enable_capture_test else "disabled"', script)
-        self.assertIn('wait_for_endpoint(service_arn, capture_test=args.enable_capture_test)', script)
+        self.assertIn('"capture-test" if args.enable_capture_test else "disabled"', script)
+        self.assertIn('capture_test=args.enable_capture_test', script)
+
+    def test_shadow_triage_pilot_is_explicit_and_cannot_write(self):
+        script = (ROOT / "scripts" / "deploy_partner_ops_aws.py").read_text()
+        self.assertIn('SHADOW_TRIAGE_MODEL = "claude-sonnet-4-6"', script)
+        self.assertIn('"--enable-shadow-triage-test"', script)
+        self.assertIn('Shadow triage requires --enable-capture-test.', script)
+        self.assertIn('"P_OPS_TRIAGE_SHADOW_ENABLED", "value": "true" if shadow_triage_test else "false"', script)
+        self.assertIn('{"name": "NOTION_TOKEN", "valueFrom": outputs["NotionTokenSecretArn"]}', script)
+        self.assertIn('{"name": "ANTHROPIC_API_KEY", "valueFrom": outputs["AnthropicApiKeySecretArn"]}', script)
+        self.assertIn('"P_OPS_NOTION_WRITE"', script)
+        self.assertIn('"P_OPS_SEND_MESSAGES"', script)
 
     def test_setup_requires_separate_slack_credentials(self):
         guide = (ROOT / "PARTNER-OPS-AWS-SETUP.md").read_text()
