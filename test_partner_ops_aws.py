@@ -26,6 +26,15 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn('"containerPath": "/data"', script)
         self.assertNotIn("A0C76FQTM62", script)
 
+    def test_capture_pilot_is_explicit_and_allowlisted(self):
+        script = (ROOT / "scripts" / "deploy_partner_ops_aws.py").read_text()
+        self.assertIn('CAPTURE_TEST_CHANNEL_ID = "C0C7HG8KYFL"', script)
+        self.assertIn('CAPTURE_TEST_USER_ID = "U0BEHPEJA6L"', script)
+        self.assertIn('"--enable-capture-test"', script)
+        self.assertIn('"P_OPS_CAPTURE_ENABLED", "value": "true" if capture_test else "false"', script)
+        self.assertIn('"activation": "capture-test" if args.enable_capture_test else "disabled"', script)
+        self.assertIn('wait_for_endpoint(service_arn, capture_test=args.enable_capture_test)', script)
+
     def test_setup_requires_separate_slack_credentials(self):
         guide = (ROOT / "PARTNER-OPS-AWS-SETUP.md").read_text()
         self.assertIn("Do not copy the Team Partner Agent token", guide)
