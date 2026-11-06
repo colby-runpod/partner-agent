@@ -204,7 +204,9 @@ def sync_receipt(remote,r,d,permalink):
         remote.patch(page['id'],props)
     ref=value(page,'Intake Ref')
     match=re.fullmatch(r'(?:tpa|slack):([A-Z0-9]+):(\d+\.\d+)',ref)
-    if match:
+    # Pipeline-owned HubSpot DMs are not conversations this bot can access.
+    # Their destination receipt and audit still complete; only source reactions skip.
+    if match and not match[1].startswith('D'):
         emoji='clock3' if decision=='Declined' else 'white_check_mark'
         for method,name in [('reactions.add',emoji),('reactions.remove','white_check_mark' if decision=='Declined' else 'clock3')]:
             try: remote.slack(method,{'channel':match[1],'timestamp':match[2],'name':name})

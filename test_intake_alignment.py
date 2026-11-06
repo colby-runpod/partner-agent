@@ -65,6 +65,22 @@ class Contract(unittest.TestCase):
         self.assertEqual(a.value(self.remote.get(self.iid),'Status'),'Actioned')
         self.assertEqual(len(self.remote.activity),1)
         self.assertTrue(any(m=='reactions.add' and d['name']=='white_check_mark' for m,d in self.remote.calls))
+    def test_pipeline_dm_receipt_completes_without_source_reaction(self):
+        p=self.setup()
+        self.remote.patch(self.iid,{'Intake Ref':a.rich('slack:D0BFPB446H3:100.1')})
+        original=self.remote.slack
+        def slack(method,data):
+            if method.startswith('reactions.') and data.get('channel','').startswith('D'):
+                raise RuntimeError('channel_not_found')
+            return original(method,data)
+        self.remote.slack=slack
+        self.box.post(p);self.box.post(p)
+        self.assertEqual(len(self.posts()),1)
+        self.assertEqual(self.box.get(p['id'])['state'],'posted')
+        self.assertEqual(a.value(self.remote.get(self.iid),'Status'),'Actioned')
+        self.assertEqual(len(self.remote.activity),1)
+        self.assertFalse(any(m.startswith('reactions.') and d.get('channel','').startswith('D') for m,d in self.remote.calls))
+
     def test_duplicate_queue_row_adopts_same_receipt(self):
         p=self.setup();self.box.post(p)
         duplicate=copy.deepcopy(p);duplicate['id']=str(uuid.UUID(int=2));self.remote.pages[duplicate['id']]=copy.deepcopy(duplicate)
