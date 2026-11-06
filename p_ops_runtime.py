@@ -1300,7 +1300,10 @@ def worker():
         raise SystemExit("Set P_OPS_ENABLED=true to run the p-OPS worker.")
     stores = components(cfg)
     with open(cfg["db"] + ".worker.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # A replacement task can overlap the current task during an ECS rollout.
+        # Wait for the current worker to release the shared lock instead of
+        # exiting and causing the replacement container to fail its healthcheck.
+        fcntl.flock(lock, fcntl.LOCK_EX)
         while True:
             run_once(cfg, stores)
             time.sleep(max(1, int(os.environ.get("P_OPS_POLL_SECONDS", "5"))))
