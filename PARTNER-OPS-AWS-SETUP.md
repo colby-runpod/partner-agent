@@ -77,3 +77,9 @@ Before configuring Slack Events or Interactivity:
 - A healthy deployment is not proof that Slack or the briefing is live.
 - Mark the Notion Ops record live only after deployed revision, health, Slack
   access and the first natural receipt are verified.
+
+## Capture-only pilot
+
+After the disabled deployment, the operator may add `--enable-capture-test` to enable only Colby's mentions and configured handshake captures in private `#ask-partners`. This mode persists the capture and adds its processing reaction. It does not enable shadow triage, review replies, the Working Task briefing, Notion writes, Linear writes, or general message sending.
+
+The capture-test allowlist is intentionally fixed to channel `C0C7HG8KYFL` and user `U0BEHPEJA6L`. A broader channel or user rollout requires a separate reviewed change.

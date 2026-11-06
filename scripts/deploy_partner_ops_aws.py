@@ -20,6 +20,8 @@ CLUSTER = "default"
 INFRA_ROLE = "arn:aws:iam::626963115342:role/service-role/ecsInfrastructureRoleForExpressServices"
 PARTNER_OPS_APP_ID = "A0CA2C43D4L"
 RUNPOD_TEAM_ID = "T06F03V8NUQ"
+CAPTURE_TEST_CHANNEL_ID = "C0C7HG8KYFL"
+CAPTURE_TEST_USER_ID = "U0BEHPEJA6L"
 
 
 def command(*args, input_text=None):
@@ -60,10 +62,10 @@ def build_and_push(repository, tag):
     return repository + "@" + digest
 
 
-def task_definition(image, outputs, subnets):
+def task_definition(image, outputs, subnets, capture_test=False):
     disabled = [
-        "P_OPS_CAPTURE_ENABLED", "P_OPS_DAILY_REVIEW_ENABLED",
-        "P_OPS_TRIAGE_SHADOW_ENABLED", "P_OPS_REVIEW_POSTING_ENABLED",
+        "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_TRIAGE_SHADOW_ENABLED",
+        "P_OPS_REVIEW_POSTING_ENABLED",
         "P_OPS_REVIEW_INTERACTIVE_ENABLED", "P_OPS_NOTION_CREATE",
         "P_OPS_NOTION_WRITE", "P_OPS_LINEAR_WRITE", "P_OPS_SEND_MESSAGES",
         "P_OPS_WORKING_TASK_BRIEF_ENABLED",
@@ -75,7 +77,13 @@ def task_definition(image, outputs, subnets):
         {"name": "SLACK_APP_ID", "value": PARTNER_OPS_APP_ID},
         {"name": "SLACK_TEAM_ID", "value": RUNPOD_TEAM_ID},
         {"name": "PORT", "value": "8080"},
+        {"name": "P_OPS_CAPTURE_ENABLED", "value": "true" if capture_test else "false"},
     ] + [{"name": name, "value": "false"} for name in disabled]
+    if capture_test:
+        environment.extend([
+            {"name": "P_OPS_CAPTURE_CHANNEL_IDS", "value": CAPTURE_TEST_CHANNEL_ID},
+            {"name": "P_OPS_CAPTURE_USER_IDS", "value": CAPTURE_TEST_USER_ID},
+        ])
     definition = {
         "family": "partner-ops-agent",
         "executionRoleArn": outputs["ExecutionRoleArn"],
@@ -170,7 +178,7 @@ def deploy(task_arn, outputs, subnets):
     return result["service"]["serviceArn"]
 
 
-def wait_for_endpoint(service_arn):
+def wait_for_endpoint(service_arn, capture_test=False):
     deadline = time.time() + 900
     while time.time() < deadline:
         service = aws("ecs", "describe-express-gateway-service", "--service-arn", service_arn)["service"]
@@ -184,7 +192,7 @@ def wait_for_endpoint(service_arn):
                         if (health.get("status") == "listening" and
                                 health.get("slack_app_id") == PARTNER_OPS_APP_ID and
                                 health.get("working_task_brief_enabled") is False and
-                                health.get("capture_enabled") is False):
+                                health.get("capture_enabled") is capture_test):
                             return endpoint, health
                     except (OSError, ValueError):
                         pass
@@ -198,6 +206,8 @@ def main():
                         help="Comma-separated subnet IDs used by the foundation stack.")
     parser.add_argument("--deploy-disabled", action="store_true",
                         help="Required acknowledgement that this deploy keeps every action gate off.")
+    parser.add_argument("--enable-capture-test", action="store_true",
+                        help="Enable capture only for Colby in #ask-partners; all downstream gates stay off.")
     args = parser.parse_args()
     if not args.deploy_disabled:
         raise SystemExit("Pass --deploy-disabled. This script cannot activate Partner Ops processing.")
@@ -205,16 +215,16 @@ def main():
     outputs = stack_outputs()
     tag = clean_commit()
     image = build_and_push(outputs["RepositoryUri"], tag)
-    task_arn = register(task_definition(image, outputs, subnets))
+    task_arn = register(task_definition(image, outputs, subnets, capture_test=args.enable_capture_test))
     service_arn = deploy(task_arn, outputs, subnets)
-    endpoint, health = wait_for_endpoint(service_arn)
+    endpoint, health = wait_for_endpoint(service_arn, capture_test=args.enable_capture_test)
     print(json.dumps({
         "service": service_arn,
         "task_definition": task_arn,
         "image": image,
         "endpoint": endpoint,
         "health": health,
-        "activation": "disabled",
+        "activation": "capture-test" if args.enable_capture_test else "disabled",
     }, indent=2, sort_keys=True))
 
 
