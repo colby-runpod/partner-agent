@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Guarded AWS foundation for the dedicated Runpod Partner Ops service.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets used by the ECS Express service and EFS mount targets.
+
+Resources:
+  PartnerOpsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: partner-ops-agent
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/ecs/partner-ops-agent
+      RetentionInDays: 30
+
+  PartnerOpsTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks for the dedicated Partner Ops service
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsEfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NFS access from Partner Ops ECS tasks only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref PartnerOpsTaskSecurityGroup
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsFileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      BackupPolicy:
+        Status: ENABLED
+      FileSystemTags:
+        - Key: Name
+          Value: partner-ops-agent
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref PartnerOpsFileSystem
+      PosixUser:
+        Uid: '1000'
+        Gid: '1000'
+      RootDirectory:
+        Path: /partner-ops
+        CreationInfo:
+          OwnerUid: '1000'
+          OwnerGid: '1000'
+          Permissions: '0750'
+      AccessPointTags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsMountTargetOne:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref PartnerOpsFileSystem
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroups:
+        - !Ref PartnerOpsEfsSecurityGroup
+
+  PartnerOpsMountTargetTwo:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref PartnerOpsFileSystem
+      SubnetId: !Select [1, !Ref SubnetIds]
+      SecurityGroups:
+        - !Ref PartnerOpsEfsSecurityGroup
+
+  PartnerOpsMountTargetThree:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref PartnerOpsFileSystem
+      SubnetId: !Select [2, !Ref SubnetIds]
+      SecurityGroups:
+        - !Ref PartnerOpsEfsSecurityGroup
+
+  PartnerOpsBotToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/slack-bot-token
+      Description: Replace the generated disabled-deployment placeholder with the partner-ops bot token before Slack activation.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsSigningSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/slack-signing-secret
+      Description: Replace the generated disabled-deployment placeholder with the partner-ops signing secret before Slack activation.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsReviewPassword:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/review-password
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsCsrfSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/csrf-secret
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludeCharacters: '"@/\\'
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: partner-ops-ecs-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadPartnerOpsStartupSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref PartnerOpsBotToken
+                  - !Ref PartnerOpsSigningSecret
+                  - !Ref PartnerOpsReviewPassword
+                  - !Ref PartnerOpsCsrfSecret
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt PartnerOpsRepository.RepositoryUri
+  LogGroupName:
+    Value: !Ref PartnerOpsLogGroup
+  TaskSecurityGroupId:
+    Value: !Ref PartnerOpsTaskSecurityGroup
+  FileSystemId:
+    Value: !Ref PartnerOpsFileSystem
+  AccessPointId:
+    Value: !Ref PartnerOpsAccessPoint
+  ExecutionRoleArn:
+    Value: !GetAtt PartnerOpsExecutionRole.Arn
+  BotTokenSecretArn:
+    Value: !Ref PartnerOpsBotToken
+  SigningSecretArn:
+    Value: !Ref PartnerOpsSigningSecret
+  ReviewPasswordSecretArn:
+    Value: !Ref PartnerOpsReviewPassword
+  CsrfSecretArn:
+    Value: !Ref PartnerOpsCsrfSecret
