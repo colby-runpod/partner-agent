@@ -10,7 +10,7 @@ import os
 import re
 import urllib.parse
 
-GUIDE_VERSION = '2026-11-05.5'
+GUIDE_VERSION = '2026-11-09.1'
 ACTIVITY = 'b17354bc-69b1-44fe-bb92-7fda8fab1a5d'
 INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 OUTBOX = 'b9f3d371-6c3b-47f5-880a-47342ae69456'
@@ -135,7 +135,7 @@ def queue_handoff(notion, event):
     kind={'Supply Team':'supply_lead','Events/Sponsorship':'event_request','Marketing':'event_request'}.get(route,'other')
     name='tpa:'+page['id']+':'+kind+':'+event['completion_source']['ts']
     props={'Title':title(name),'Kind':{'select':{'name':kind}},'Status':{'select':{'name':'Queued'}},
-           'Channel ID':rich(event['channel']),'Body':rich(event['text']), 'Mention IDs':rich(''),
+           'Channel ID':rich(event['channel']),'Body':rich(event['text']), 'Mention IDs':rich(','.join(ROUTES[route][1])),
            'Related Intake':{'relation':[{'id':page['id']}]}}
     result=notion._req('POST','pages',{'parent':{'type':'data_source_id','data_source_id':OUTBOX},'properties':props})
     audit(notion._req,result['id']+':queued','Handoff queued','Queued '+route,intake=page['id'],outbox=result['id'],channel=event['channel'])
@@ -160,9 +160,47 @@ def intake_for(remote, r):
     return p
 
 
+def route_channel(page, kind):
+    route=value(page,'Forward To')
+    if route=='Influencer/Creator': route='Affiliate Program'
+    if route in ROUTES: return ROUTES[route][0]
+    if route=='Partnerships':
+        if kind=='invitation_queue': return 'C0C7HG8KYFL'
+        if kind in ('priority_alert','other'): return 'C0C7R970C5T'
+    return None
+
+
+def backfill_mentions(remote, page):
+    r = {'id':page['id'],'mentions':value(page,'Mention IDs'),'channel':value(page,'Channel ID'),
+         'related':value(page,'Related Intake') or [],'kind':value(page,'Kind')}
+    if r['mentions'].strip() or r['channel'] not in SPECIALIST_CHANNELS or len(r['related'])!=1: return page
+    intake=remote.get(r['related'][0])
+    if route_channel(intake,r['kind'])!=r['channel']: return page
+    route=value(intake,'Forward To')
+    if route=='Influencer/Creator': route='Affiliate Program'
+    owners=ROUTES[route][1]
+    if owners:
+        remote.patch(r['id'],{'Mention IDs':rich(','.join(owners))})
+        return remote.get(r['id'])
+    return page
+
+
+def delayed_check(remote,r):
+    if len(r['related'])!=1: return 'Delayed handoff requires exactly one linked intake row'
+    intake=remote.get(r['related'][0])
+    if intake.get('parent',{}).get('data_source_id')!=INTAKE: return 'Linked intake is outside the approved database'
+    if value(intake,'Status')!='Flagged': return 'Delayed handoff held: intake Status is '+str(value(intake,'Status'))+', not Flagged'
+    if route_channel(intake,r['kind'])!=r['channel']: return 'Delayed handoff held: Forward To does not match destination channel'
+    return ''
+
+
 def source_links(text):
     # Exact original Slack source URL, never a company/contact match alone.
-    return set(re.findall(r'https://(?:[\w-]+\.)?slack\.com/archives/[A-Z0-9]+/p\d+',text))
+    links={'https://slack.com/archives/'+c+'/p'+ts for c,ts in re.findall(r'https://(?:[\w-]+\.)*slack\.com/archives/([A-Z0-9]+)/p(\d+)',text)}
+    for url in re.findall(r'https://mail\.google\.com/[^|>\s]+',text):
+        fragment=urllib.parse.urlsplit(url).fragment
+        if fragment and '/' in fragment: links.add('https://mail.google.com/#'+fragment.rsplit('/',1)[-1])
+    return links
 
 
 def prior_post(remote,r):
@@ -189,7 +227,7 @@ def prior_post(remote,r):
 
 
 def sync_receipt(remote,r,d,permalink):
-    if r['channel'] not in SPECIALIST_CHANNELS: return
+    if not r['related']: return
     page=remote.get(r['related'][0]);old=value(page,'Status')
     decision=d.get('decision')
     action='Handoff declined' if decision=='Declined' else 'Pickup confirmed' if decision else 'Handoff posted'

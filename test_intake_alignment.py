@@ -97,7 +97,73 @@ class Contract(unittest.TestCase):
         self.box.post(p);self.assertEqual(len(self.posts()),1)
     def test_stale_row_held_and_reported(self):
         p=self.setup();p['created_time']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=73)).isoformat()
-        self.box.post(p);self.assertFalse(self.posts());self.assertIn('72 hours',a.value(self.remote.get(p['id']),'Error'))
+        self.box.post(p);self.assertFalse(self.posts());self.assertIn('not Flagged',a.value(self.remote.get(p['id']),'Error'))
+        self.assertEqual(a.value(self.remote.get(p['id']),'Status'),'Queued')
+    def test_delayed_flagged_handoff_posts_with_label_and_owner_backfill(self):
+        p=self.setup();p['created_time']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=80)).isoformat()
+        p['properties']['Mention IDs']=dict(type='rich_text',**a.rich(''))
+        self.remote.pages[p['id']]=copy.deepcopy(p)
+        self.remote.patch(self.iid,{'Status':{'select':{'name':'Flagged'}}})
+        self.box.post(p);self.box.post(self.remote.get(p['id']))
+        self.assertEqual(len(self.posts()),1)
+        self.assertTrue(self.posts()[0]['text'].startswith('Delayed handoff, queued '))
+        self.assertIn('<@U0ACSTWBYHG>',self.posts()[0]['text'])
+        self.assertEqual(a.value(self.remote.get(p['id']),'Mention IDs'),'U0ACSTWBYHG')
+        self.assertEqual(a.value(self.remote.get(self.iid),'Status'),'Actioned')
+        self.assertEqual(a.value(self.remote.activity[0],'Guide Version'),'2026-11-09.1')
+
+    def test_own_queue_creation_sets_current_route_owner_ids(self):
+        for route,(_,owners) in a.ROUTES.items():
+            notion=Mock();notion._req.return_value={'id':'new'}
+            intake=prop_page(self.iid,**{'Forward To':route})
+            with patch.object(a,'capture',return_value=intake),patch.object(a,'set_route',return_value=route),patch.object(a,'query',return_value=iter([])),patch.object(a,'audit'):
+                a.queue_handoff(notion,{'completion_source':{'ts':'100.1'},'completion_route':route,'channel':a.ROUTES[route][0],'key':'key','text':'Lead'})
+            props=notion._req.call_args.args[2]['properties']
+            self.assertEqual(a.value({'properties':props},'Mention IDs'),','.join(owners))
+
+    def test_delayed_already_actioned_adopts_existing_post(self):
+        p=self.setup();p['created_time']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=80)).isoformat()
+        self.remote.pages[p['id']]=copy.deepcopy(p)
+        self.remote.patch(self.iid,{'Status':{'select':{'name':'Actioned'}}})
+        self.remote.history=[{'user':outbox.BOT,'ts':'44.1','text':a.value(p,'Body')}]
+        self.box.post(p)
+        self.assertFalse(self.posts());self.assertEqual(self.box.get(p['id'])['ts'],'44.1')
+
+    def test_delayed_route_mismatch_stays_queued(self):
+        p=self.setup();p['created_time']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(hours=80)).isoformat()
+        self.remote.pages[p['id']]=copy.deepcopy(p)
+        self.remote.patch(self.iid,{'Status':{'select':{'name':'Flagged'}},'Forward To':{'select':{'name':'Startup Program'}}})
+        self.box.post(p)
+        self.assertFalse(self.posts())
+        self.assertEqual(a.value(self.remote.get(p['id']),'Status'),'Queued')
+        self.assertIn('does not match',a.value(self.remote.get(p['id']),'Error'))
+
+    def test_priority_event_then_oldest_first(self):
+        pages=[]
+        for n,created in [(92,'2026-11-04T00:00:00Z'),(166,'2026-11-09T00:00:00Z'),(129,'2026-11-06T00:00:00Z')]:
+            p=self.setup(n);p['created_time']=created;p['properties']['Post ID']={'type':'unique_id','unique_id':{'number':n}};pages.append(p)
+        self.remote.query=lambda f:pages
+        with patch.object(self.box,'post') as post,patch.object(a,'refresh_guide'):
+            self.box.poll()
+        self.assertEqual([c.args[0]['properties']['Post ID']['unique_id']['number'] for c in post.call_args_list],[166,92,129])
+
+    def test_test_rows_never_eligible_even_with_allowed_title(self):
+        p=self.setup(12);p['properties']['Post ID']={'type':'unique_id','unique_id':{'number':12}}
+        self.assertFalse(self.box.eligible(p))
+        p=self.setup(13);p['properties']['Title']={'type':'title',**a.title('TEST event post')}
+        self.assertFalse(self.box.eligible(p))
+
+    def test_source_identity_ignores_slack_hostname_and_gmail_folder(self):
+        self.assertEqual(a.source_links('https://runpod.enterprise.slack.com/archives/C123/p1001'),a.source_links('https://runpod-team.slack.com/archives/C123/p1001'))
+        self.assertEqual(a.source_links('https://mail.google.com/mail/u/0/#inbox/abc123'),a.source_links('https://mail.google.com/mail/u/1/#all/abc123'))
+
+    def test_gmail_source_duplicate_is_adopted(self):
+        p=self.setup();p['properties']['Body']={'type':'rich_text',**a.rich('<https://mail.google.com/mail/u/0/#all/abc123|Original email>')}
+        self.remote.pages[p['id']]=copy.deepcopy(p)
+        self.remote.history=[{'user':outbox.BOT,'ts':'44.1','text':a.value(p,'Body')}]
+        self.box.post(p)
+        self.assertFalse(self.posts());self.assertEqual(self.box.get(p['id'])['ts'],'44.1')
+
     def test_park_route_mismatch_missing_relation_fail_before_delivery(self):
         for mode in ('park','mismatch','no_record'):
             with self.subTest(mode=mode):
