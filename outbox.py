@@ -381,7 +381,7 @@ class Outbox:
                 prior=alignment.prior_post(self.remote,r) if r['related'] else None
                 if prior:
                     if self.claim_send(r):
-                        self.save(r['id'],ts=prior,state='sync')
+                        self.save(r['id'],ts=prior,state='sync',at=dt.datetime.fromtimestamp(float(prior),dt.timezone.utc).isoformat())
                         self.sync(self.get(r['id']))
                     return
                 if r.get('delayed_date'):

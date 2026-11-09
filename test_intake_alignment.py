@@ -153,6 +153,10 @@ class Contract(unittest.TestCase):
         p=self.setup(13);p['properties']['Title']={'type':'title',**a.title('TEST event post')}
         self.assertFalse(self.box.eligible(p))
 
+    def test_source_identity_ignores_slack_hostname_and_gmail_folder(self):
+        self.assertEqual(a.source_links('https://runpod.enterprise.slack.com/archives/C123/p1001'),a.source_links('https://runpod-team.slack.com/archives/C123/p1001'))
+        self.assertEqual(a.source_links('https://mail.google.com/mail/u/0/#inbox/abc123'),a.source_links('https://mail.google.com/mail/u/1/#all/abc123'))
+
     def test_gmail_source_duplicate_is_adopted(self):
         p=self.setup();p['properties']['Body']={'type':'rich_text',**a.rich('<https://mail.google.com/mail/u/0/#all/abc123|Original email>')}
         self.remote.pages[p['id']]=copy.deepcopy(p)

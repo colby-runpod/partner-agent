@@ -196,7 +196,11 @@ def delayed_check(remote,r):
 
 def source_links(text):
     # Exact original Slack source URL, never a company/contact match alone.
-    return set(re.findall(r'https://(?:[\w-]+\.)?slack\.com/archives/[A-Z0-9]+/p\d+|https://mail\.google\.com/[^|>\s]+',text))
+    links={'https://slack.com/archives/'+c+'/p'+ts for c,ts in re.findall(r'https://(?:[\w-]+\.)*slack\.com/archives/([A-Z0-9]+)/p(\d+)',text)}
+    for url in re.findall(r'https://mail\.google\.com/[^|>\s]+',text):
+        fragment=urllib.parse.urlsplit(url).fragment
+        if fragment and '/' in fragment: links.add('https://mail.google.com/#'+fragment.rsplit('/',1)[-1])
+    return links
 
 
 def prior_post(remote,r):
