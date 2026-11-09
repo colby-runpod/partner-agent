@@ -83,3 +83,9 @@ Before configuring Slack Events or Interactivity:
 After the disabled deployment, the operator may add `--enable-capture-test` to enable only Colby's mentions and configured handshake captures in private `#ask-partners`. This mode persists the capture and adds its processing reaction. It does not enable shadow triage, review replies, the Working Task briefing, Notion writes, Linear writes, or general message sending.
 
 The capture-test allowlist is intentionally fixed to channel `C0C7HG8KYFL` and user `U0BEHPEJA6L`. A broader channel or user rollout requires a separate reviewed change.
+
+## Read-only shadow triage pilot
+
+Add `--enable-shadow-triage-test` together with `--enable-capture-test` only after the dedicated `partner-ops/notion-token` and `partner-ops/anthropic-api-key` secrets pass read-only preflight. Shadow triage rereads relevant Working Tasks and produces a guarded recommendation in the internal ledger. It does not post the result to Slack or enable Notion, Linear, message, briefing, or approval writes.
+
+The initial model is fixed to `claude-sonnet-4-6`. Changing the model, expanding Notion access, or enabling a Slack review response requires a separate reviewed stage.

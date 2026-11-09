@@ -22,6 +22,7 @@ PARTNER_OPS_APP_ID = "A0CA2C43D4L"
 RUNPOD_TEAM_ID = "T06F03V8NUQ"
 CAPTURE_TEST_CHANNEL_ID = "C0C7HG8KYFL"
 CAPTURE_TEST_USER_ID = "U0BEHPEJA6L"
+SHADOW_TRIAGE_MODEL = "claude-sonnet-4-6"
 
 
 def command(*args, input_text=None):
@@ -62,10 +63,9 @@ def build_and_push(repository, tag):
     return repository + "@" + digest
 
 
-def task_definition(image, outputs, subnets, capture_test=False):
+def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_test=False):
     disabled = [
-        "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_TRIAGE_SHADOW_ENABLED",
-        "P_OPS_REVIEW_POSTING_ENABLED",
+        "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_REVIEW_POSTING_ENABLED",
         "P_OPS_REVIEW_INTERACTIVE_ENABLED", "P_OPS_NOTION_CREATE",
         "P_OPS_NOTION_WRITE", "P_OPS_LINEAR_WRITE", "P_OPS_SEND_MESSAGES",
         "P_OPS_WORKING_TASK_BRIEF_ENABLED",
@@ -78,12 +78,15 @@ def task_definition(image, outputs, subnets, capture_test=False):
         {"name": "SLACK_TEAM_ID", "value": RUNPOD_TEAM_ID},
         {"name": "PORT", "value": "8080"},
         {"name": "P_OPS_CAPTURE_ENABLED", "value": "true" if capture_test else "false"},
+        {"name": "P_OPS_TRIAGE_SHADOW_ENABLED", "value": "true" if shadow_triage_test else "false"},
     ] + [{"name": name, "value": "false"} for name in disabled]
     if capture_test:
         environment.extend([
             {"name": "P_OPS_CAPTURE_CHANNEL_IDS", "value": CAPTURE_TEST_CHANNEL_ID},
             {"name": "P_OPS_CAPTURE_USER_IDS", "value": CAPTURE_TEST_USER_ID},
         ])
+    if shadow_triage_test:
+        environment.append({"name": "ANTHROPIC_MODEL", "value": SHADOW_TRIAGE_MODEL})
     definition = {
         "family": "partner-ops-agent",
         "executionRoleArn": outputs["ExecutionRoleArn"],
@@ -118,6 +121,8 @@ def task_definition(image, outputs, subnets, capture_test=False):
                 {"name": "SLACK_SIGNING_SECRET", "valueFrom": outputs["SigningSecretArn"]},
                 {"name": "P_OPS_REVIEW_PASSWORD", "valueFrom": outputs["ReviewPasswordSecretArn"]},
                 {"name": "P_OPS_CSRF_SECRET", "valueFrom": outputs["CsrfSecretArn"]},
+                {"name": "NOTION_TOKEN", "valueFrom": outputs["NotionTokenSecretArn"]},
+                {"name": "ANTHROPIC_API_KEY", "valueFrom": outputs["AnthropicApiKeySecretArn"]},
             ],
             "mountPoints": [{
                 "sourceVolume": "partner-ops-data", "containerPath": "/data", "readOnly": False,
@@ -178,7 +183,7 @@ def deploy(task_arn, outputs, subnets):
     return result["service"]["serviceArn"]
 
 
-def wait_for_endpoint(service_arn, capture_test=False):
+def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False):
     deadline = time.time() + 900
     while time.time() < deadline:
         service = aws("ecs", "describe-express-gateway-service", "--service-arn", service_arn)["service"]
@@ -192,7 +197,8 @@ def wait_for_endpoint(service_arn, capture_test=False):
                         if (health.get("status") == "listening" and
                                 health.get("slack_app_id") == PARTNER_OPS_APP_ID and
                                 health.get("working_task_brief_enabled") is False and
-                                health.get("capture_enabled") is capture_test):
+                                health.get("capture_enabled") is capture_test and
+                                health.get("triage_shadow_enabled") is shadow_triage_test):
                             return endpoint, health
                     except (OSError, ValueError):
                         pass
@@ -208,23 +214,32 @@ def main():
                         help="Required acknowledgement that this deploy keeps every action gate off.")
     parser.add_argument("--enable-capture-test", action="store_true",
                         help="Enable capture only for Colby in #ask-partners; all downstream gates stay off.")
+    parser.add_argument("--enable-shadow-triage-test", action="store_true",
+                        help="Evaluate captured items in read-only shadow mode without posting or writing.")
     args = parser.parse_args()
     if not args.deploy_disabled:
         raise SystemExit("Pass --deploy-disabled. This script cannot activate Partner Ops processing.")
+    if args.enable_shadow_triage_test and not args.enable_capture_test:
+        raise SystemExit("Shadow triage requires --enable-capture-test.")
     subnets = [value.strip() for value in args.subnets.split(",") if value.strip()]
     outputs = stack_outputs()
     tag = clean_commit()
     image = build_and_push(outputs["RepositoryUri"], tag)
-    task_arn = register(task_definition(image, outputs, subnets, capture_test=args.enable_capture_test))
+    task_arn = register(task_definition(image, outputs, subnets,
+                                        capture_test=args.enable_capture_test,
+                                        shadow_triage_test=args.enable_shadow_triage_test))
     service_arn = deploy(task_arn, outputs, subnets)
-    endpoint, health = wait_for_endpoint(service_arn, capture_test=args.enable_capture_test)
+    endpoint, health = wait_for_endpoint(service_arn,
+                                         capture_test=args.enable_capture_test,
+                                         shadow_triage_test=args.enable_shadow_triage_test)
     print(json.dumps({
         "service": service_arn,
         "task_definition": task_arn,
         "image": image,
         "endpoint": endpoint,
         "health": health,
-        "activation": "capture-test" if args.enable_capture_test else "disabled",
+        "activation": ("shadow-triage-test" if args.enable_shadow_triage_test else
+                       "capture-test" if args.enable_capture_test else "disabled"),
     }, indent=2, sort_keys=True))
 
 

@@ -163,6 +163,34 @@ Resources:
         - Key: app
           Value: partner-ops
 
+  PartnerOpsNotionToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/notion-token
+      Description: Dedicated Notion integration token for read-only Partner Ops context until a write gate is separately approved.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: app
+          Value: partner-ops
+
+  PartnerOpsAnthropicApiKey:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/anthropic-api-key
+      Description: Dedicated Anthropic API credential for guarded Partner Ops shadow triage.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: app
+          Value: partner-ops
+
   PartnerOpsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -189,6 +217,8 @@ Resources:
                   - !Ref PartnerOpsSigningSecret
                   - !Ref PartnerOpsReviewPassword
                   - !Ref PartnerOpsCsrfSecret
+                  - !Ref PartnerOpsNotionToken
+                  - !Ref PartnerOpsAnthropicApiKey
 
 Outputs:
   RepositoryUri:
@@ -211,3 +241,7 @@ Outputs:
     Value: !Ref PartnerOpsReviewPassword
   CsrfSecretArn:
     Value: !Ref PartnerOpsCsrfSecret
+  NotionTokenSecretArn:
+    Value: !Ref PartnerOpsNotionToken
+  AnthropicApiKeySecretArn:
+    Value: !Ref PartnerOpsAnthropicApiKey
