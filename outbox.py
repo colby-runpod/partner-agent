@@ -90,7 +90,7 @@ def payload(r):
         raise ValueError('Use explicit https:// links; body was not changed')
     if r['thread'] and not re.fullmatch(r'\d+\.\d+', r['thread']):
         raise ValueError('Invalid thread timestamp')
-    text = (' '.join('<@%s>' % x for x in ids)+'\n' if ids else '') + r['body']
+    text = ('Delayed handoff, queued '+r['delayed_date']+'\n\n' if r.get('delayed_date') else '') + (' '.join('<@%s>' % x for x in ids if '<@%s>' % x not in r['body'])+'\n' if ids else '') + r['body']
     if r['channel'] == SIGNAL_CHANNEL:
         text += '\n\ncc <@%s>' % COLBY
     p = dict(channel=r['channel'], text=text, mrkdwn=True, unfurl_links=False, unfurl_media=False,
@@ -198,10 +198,12 @@ class Outbox:
             raise ValueError('Outbox cutoff requires a timezone')
         return parsed
     def eligible(self,page):
+        if re.match(r'^TEST(?:\b|:)',row(page)['title'],re.I) or page.get('properties',{}).get('Post ID',{}).get('unique_id',{}).get('number') in (12,13): return False
         if self.aligned and prop(page,'Channel ID') not in (WEEKLY_CHANNEL,SIGNAL_CHANNEL):
             name=row(page)['title']
             if not name.startswith(('pipeline:', 'Invitation:', 'tpa:')): return False
         if not self.selected(page['id'], {'channel':prop(page,'Channel ID')}): return False
+        if self.aligned and row(page)['title'].startswith(('pipeline:', 'Invitation:', 'tpa:')): return True
         if self.created_after is None: return True
         try: return self.timestamp(page.get('created_time')) > self.created_after
         except (ValueError,TypeError): return False
@@ -300,7 +302,7 @@ class Outbox:
             props['Posted At']={'date':{'start':d['at']}}
         self.remote.patch(r['id'],props)
         if self.aligned:
-            if r['channel'] in alignment.SPECIALIST_CHANNELS:
+            if r['channel'] in alignment.SPECIALIST_CHANNELS or (r['related'] and not d.get('decision') and r['title'].startswith(('pipeline:','tpa:','Invitation:'))):
                 alignment.sync_receipt(self.remote,r,d,props['Permalink']['url'])
             else:
                 alignment.audit(self.remote.notion,r['id']+':'+(d.get('decision') or 'posted'),'Card decision' if d.get('decision') else 'Note',
@@ -321,13 +323,19 @@ class Outbox:
                 self.finish_event(e['key'])
             except Exception:
                 print('Outbox pickup/decision pending; retrying next poll.',flush=True)
-        for page in self.remote.query({'property':'Status','select':{'equals':'Queued'}}):
+        pages=list(self.remote.query({'property':'Status','select':{'equals':'Queued'}}))
+        # Colby's incident priority: Nucleate UK (OUT-166), then oldest first.
+        pages.sort(key=lambda p:(p.get('properties',{}).get('Post ID',{}).get('unique_id',{}).get('number')!=166,p.get('created_time',''),p['id']))
+        for page in pages:
             try: self.post(page)
             except Exception:
                 print('Outbox row processing failed; retained for reconciliation.',flush=True)
     def post(self,page):
         if not self.eligible(page): return
         self.verify()
+        if self.aligned and alignment._GUIDE_STATE.get('blocked'):
+            self.remote.patch(page['id'],{'Error':rich('Guide validation blocked: '+alignment._GUIDE_STATE.get('reason',''))});return
+        if self.aligned: page=alignment.backfill_mentions(self.remote,page)
         r=row(page)
         if page.get('archived') or page.get('in_trash') or r['status']!='Queued': return
         d=self.get(r['id'])
@@ -342,7 +350,7 @@ class Outbox:
             except (ValueError,TypeError):
                 self.remote.patch(r['id'],{'Error':rich('Missing creation time; held for reconciliation')});return
             if age > dt.timedelta(hours=72):
-                self.remote.patch(r['id'],{'Error':rich('Older than 72 hours; pipeline must reconcile before a fresh request')});return
+                r['delayed_date']=self.timestamp(page['created_time']).astimezone(ZoneInfo('America/Denver')).date().isoformat()
         if r['ts']: return  # Never adopt or edit a message not in our own ledger.
         if r['before']:
             try:
@@ -366,16 +374,23 @@ class Outbox:
             if p['channel']!=r['channel']:
                 self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Parent channel differs')});return
             r['thread']=p['ts']
-        if self.aligned and r['channel'] in alignment.SPECIALIST_CHANNELS:
+        if self.aligned and r['channel'] not in (WEEKLY_CHANNEL,SIGNAL_CHANNEL):
             try:
-                intake=alignment.intake_for(self.remote,r)
-                prior=alignment.prior_post(self.remote,r)
+                if r.get('delayed_date') and len(r['related'])!=1:
+                    self.remote.patch(r['id'],{'Error':rich(alignment.delayed_check(self.remote,r))});return
+                prior=alignment.prior_post(self.remote,r) if r['related'] else None
                 if prior:
                     if self.claim_send(r):
                         self.save(r['id'],ts=prior,state='sync')
                         self.sync(self.get(r['id']))
                     return
-                alignment.validate_owner_membership(self.remote,r)
+                if r.get('delayed_date'):
+                    reason=alignment.delayed_check(self.remote,r)
+                    if reason:
+                        self.remote.patch(r['id'],{'Error':rich(reason)});return
+                if r['channel'] in alignment.SPECIALIST_CHANNELS:
+                    alignment.intake_for(self.remote,r)
+                    alignment.validate_owner_membership(self.remote,r)
             except Exception as exc:
                 alignment.drift(self.remote.notion,r,str(exc)[:300])
                 self.remote.patch(r['id'],{'Status':{'select':{'name':'Failed'}},'Error':rich('Handoff preflight failed: '+str(exc)[:300])});return
@@ -390,6 +405,10 @@ class Outbox:
         if r['channel']==WEEKLY_CHANNEL and os.environ.get('WEEKLY_FEEDBACK_ENABLED')=='true':
             import weekly_feedback
             r['weekly_draft_id']=weekly_feedback.resolve_draft(self.remote,r)
+        if r.get('delayed_date'):
+            reason=alignment.delayed_check(self.remote,r)
+            if reason:
+                self.remote.patch(r['id'],{'Error':rich(reason)});return
         if not self.claim_send(r): return
         for attempt in range(2):
             try:
