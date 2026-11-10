@@ -48,6 +48,18 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn('"P_OPS_NOTION_WRITE"', script)
         self.assertIn('"P_OPS_SEND_MESSAGES"', script)
 
+    def test_slack_review_pilot_is_thread_scoped_and_cannot_execute(self):
+        script = (ROOT / "scripts" / "deploy_partner_ops_aws.py").read_text()
+        self.assertIn('"--enable-slack-review-test"', script)
+        self.assertIn("Slack review requires both capture and shadow triage test stages.", script)
+        self.assertIn('"P_OPS_REVIEW_CHANNEL_ID", "value": CAPTURE_TEST_CHANNEL_ID', script)
+        self.assertIn('"P_OPS_REVIEW_USER_IDS", "value": CAPTURE_TEST_USER_ID', script)
+        self.assertIn('"P_OPS_REVIEW_POSTING_ENABLED", "value": "true" if slack_review_test else "false"', script)
+        self.assertIn('"P_OPS_REVIEW_INTERACTIVE_ENABLED", "value": "true" if slack_review_test else "false"', script)
+        self.assertIn('"P_OPS_NOTION_WRITE"', script)
+        self.assertIn('"P_OPS_LINEAR_WRITE"', script)
+        self.assertIn('"P_OPS_SEND_MESSAGES"', script)
+
     def test_setup_requires_separate_slack_credentials(self):
         guide = (ROOT / "PARTNER-OPS-AWS-SETUP.md").read_text()
         self.assertIn("Do not copy the Team Partner Agent token", guide)
