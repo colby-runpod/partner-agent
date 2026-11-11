@@ -1665,9 +1665,16 @@ def summary_parts(text, limit=3500):
 def run_summary(cfg, ledger, clients, now_utc=None, store=None):
     """One durable send intent per reporting window; uncertain sends require reconciliation."""
     now_utc = now_utc or dt.datetime.utcnow()
+    if alignment.enabled():
+        import automation_ledger
+        automation_ledger.retry(NotionWriter(cfg)._req, ledger)
     if not summary_due(cfg, ledger, now_utc):
         return False
     state = summary_state(ledger)
+    started = dt.datetime.now(dt.timezone.utc).isoformat()
+    if alignment.enabled():
+        import automation_ledger
+        automation_ledger.bind(ledger)
     local = mountain(now_utc)
     end = now_utc.replace(tzinfo=dt.timezone.utc).timestamp()
     # First activation starts at today's Mountain midnight; later runs include weekends/late arrivals.
@@ -1699,12 +1706,18 @@ def run_summary(cfg, ledger, clients, now_utc=None, store=None):
     except Exception:
         pending['status'] = 'unconfirmed'
         ledger.put('daily_summary_state', json.dumps(state))
+        if alignment.enabled():
+            automation_ledger.finish(NotionWriter(cfg)._req, ledger, now_utc.replace(tzinfo=dt.timezone.utc), started,
+                'Partial' if pending['receipts'] else 'Failed', 'Recap delivery unconfirmed; reconcile before retry.', pending['receipts'])
         print('Daily summary delivery unconfirmed; reporting window retained for reconciliation.', flush=True)
         return True
     state.update(through=end, last_date=pending['date'], pending=None,
                  receipt=dict(channel=pending['channel'], ts=pending['receipts'][0],
                               parts=pending['receipts'], start=start, end=end))
     ledger.put('daily_summary_state', json.dumps(state))
+    if alignment.enabled():
+        automation_ledger.finish(NotionWriter(cfg)._req, ledger, now_utc.replace(tzinfo=dt.timezone.utc), started,
+            'Complete', 'Daily recap posted; Slack receipts: ' + ', '.join(pending['receipts']), pending['receipts'])
     return True
 
 
@@ -1715,6 +1728,8 @@ def worker():
         raise SystemExit('CHAT_ENABLED or REVIEW_ENABLED must be true')
     with storage.worker_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')) as store:
         ledger = storage.make_ledger(store)
+        import automation_ledger
+        automation_ledger.bind(ledger)
         chat_clients, review_clients = chat.ChatClients(), ReviewClients(cfg)
         notion = NotionWriter(cfg) if cfg['notion_write'] else None
         task_writer = tasks.TaskWriter(cfg) if cfg['notion_write'] else None

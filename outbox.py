@@ -524,6 +524,8 @@ def worker():
     if storage.backend() == 'sqlite':
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with storage.worker_store(path,'outbox') as store:
+        import automation_ledger
+        automation_ledger.bind(storage.make_ledger(store))
         box = storage.make_outbox(store)
         while True:
             try:
