@@ -28,6 +28,8 @@ from p_ops_inbox import InboxLedger, create_approved_task
 from p_ops_linear import LinearClient, LinearLedger, create_approved_issue
 from p_ops_notion import Ledger as NotionLedger, NotionClient, RemoteError, apply_ready, preview
 from p_ops_notifications import ReviewNotificationLedger
+from p_ops_progression import (ClaudeDraftClient, ProgressionLedger, SlackDraftReviewClient,
+                               load_routes, prepare_task_drafts, publish_ready_reviews)
 from p_ops_shadow import ShadowLedger, run_shadow
 from p_ops_test_lab import (TestLabLedger, active_task_queue, bundle_from_notion_url,
                             bundle_from_text, evaluate_bundle, validate_corpus)
@@ -329,6 +331,11 @@ def config(env=None):
         "review_posting": env.get("P_OPS_REVIEW_POSTING_ENABLED") == "true",
         "review_channel": env.get("P_OPS_REVIEW_CHANNEL_ID", ""),
         "review_interactive": env.get("P_OPS_REVIEW_INTERACTIVE_ENABLED") == "true",
+        "task_progression": env.get("P_OPS_TASK_PROGRESSION_ENABLED") == "true",
+        "task_progression_routes": load_routes(env.get("P_OPS_TASK_PROGRESSION_ROUTES", "[]")),
+        "task_progression_min_confidence": float(env.get("P_OPS_TASK_PROGRESSION_MIN_CONFIDENCE", "0.80")),
+        "task_progression_max_risk": float(env.get("P_OPS_TASK_PROGRESSION_MAX_RISK", "35")),
+        "task_progression_min_priority": float(env.get("P_OPS_TASK_PROGRESSION_MIN_PRIORITY", "40")),
         "review_user_ids": {value.strip() for value in env.get(
             "P_OPS_REVIEW_USER_IDS", env.get("P_OPS_CAPTURE_USER_IDS", "")).split(",") if value.strip()},
         "public_url": env.get("P_OPS_PUBLIC_URL", "").rstrip("/"),
@@ -349,6 +356,12 @@ def config(env=None):
         raise ValueError("Enable P_OPS_TRIAGE_SHADOW_ENABLED before interactive review.")
     if cfg["review_interactive"] and not cfg["review_user_ids"]:
         raise ValueError("Set P_OPS_REVIEW_USER_IDS before enabling interactive review.")
+    if cfg["task_progression"] and not cfg["review_posting"]:
+        raise ValueError("Enable P_OPS_REVIEW_POSTING_ENABLED before task progression.")
+    if cfg["task_progression"] and not cfg["task_progression_routes"]:
+        raise ValueError("Set P_OPS_TASK_PROGRESSION_ROUTES before task progression.")
+    if cfg["task_progression"] and not cfg["public_url"]:
+        raise ValueError("Set P_OPS_PUBLIC_URL before task progression.")
     if cfg["working_task_brief_enabled"] and cfg.get("app_id") != PARTNER_OPS_APP_ID:
         raise ValueError("The Working Task briefing must use the partner-ops Slack app.")
     if cfg["working_task_brief_enabled"] and not cfg["feedback_users"]:
@@ -914,6 +927,7 @@ class Dashboard:
                     ("Shadow triage", "Evaluates captured work without making external changes.", bool(self.cfg.get("triage_shadow"))),
                     ("Slack review posts", "Posts review requests only to the approved internal channel.", bool(self.cfg.get("review_posting"))),
                     ("Slack approvals", "Runs one persisted approval question at a time in the review thread.", bool(self.cfg.get("review_interactive"))),
+                    ("Task progression", "Prepares exact drafts for explicitly opted-in Working Tasks.", bool(self.cfg.get("task_progression"))),
                     ("Slack capture", "Accepts the configured handshake reaction as a capture signal.", bool(self.cfg.get("enabled"))),
                 ))
             write_rows = "".join(
@@ -1145,6 +1159,7 @@ class RuntimeApp:
                                                   "triage_shadow_enabled": self.cfg.get("triage_shadow", False),
                                                   "review_posting_enabled": self.cfg.get("review_posting", False),
                                                   "review_interactive_enabled": self.cfg.get("review_interactive", False),
+                                                  "task_progression_enabled": self.cfg.get("task_progression", False),
                                                   "review_channel_configured": bool(self.cfg.get("review_channel")),
                                                   "working_task_brief_enabled": self.cfg.get("working_task_brief_enabled", False),
                                                   "working_task_brief_channel": self.cfg.get("working_task_brief_channel"),
@@ -1304,6 +1319,20 @@ def run_once(cfg, stores, clients=None, today=None):
         for row in messages.rows(("send_authorized",)):
             if row["kind"] == "slack":
                 results.append(("message", row["id"], send_message(messages, row["id"], sender)))
+    if cfg.get("task_progression"):
+        client = clients.get("notion") or NotionClient()
+        progression = ProgressionLedger(cfg["db"])
+        draft_client = clients.get("progression_draft") or ClaudeDraftClient()
+        prepared = prepare_task_drafts(
+            client.active_pages(), cfg["task_progression_routes"], progression, messages, draft_client,
+            cfg["task_progression_min_confidence"], cfg["task_progression_max_risk"],
+            cfg["task_progression_min_priority"])
+        results.extend(("task_progression", item_id, state) for item_id, state in prepared)
+        requester = sorted(cfg.get("review_user_ids") or {""})[0]
+        review_client = clients.get("progression_review") or SlackDraftReviewClient(
+            cfg["review_channel"], cfg["team_id"], cfg["public_url"], requester)
+        results.extend(("task_progression_review", item_id, state)
+                       for item_id, state in publish_ready_reviews(progression, messages, review_client))
     state = RuntimeState(cfg["db"])
     day = (today or dt.datetime.now(ZoneInfo("America/Denver")).date()).isoformat()
     if cfg["daily_review"] and state.get("last_daily_preview") != day:

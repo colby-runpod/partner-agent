@@ -113,3 +113,31 @@ allows only the narrowly generated internal review response. Notion creation
 and updates, Linear writes, the Working Task briefing, daily previews, general
 message sending, email, and execution remain disabled. Recorded Slack answers
 do not authorize those capabilities.
+
+## Guarded Working Task progression pilot
+
+After the Slack review stage is verified, add `--enable-task-progression-test`
+to prepare drafts for explicitly opted-in Working Tasks. The first route is
+restricted to `#external-leanscale-fours-prm` and the reviewed LeanScale
+contacts.
+
+A task is eligible only when all of these are true:
+
+- Status is active and Work Mode is `Prepare` or `Execute`.
+- `Request Draft` is checked and Draft Status is `Requested` or `In progress`.
+- Approval Class is `Communication`.
+- The task has a Next Step, Agent Confidence is at least `0.80`, Priority Score
+  is at least `40`, Risk Score is no more than `35`, and Alignment Confidence
+  is `High` or `Medium`.
+- The task is not blocked, has no unresolved Decision Required, and matches one
+  exact allowlisted destination.
+
+The worker uses only the task's current Notion context, evidence links, source
+link, automation notes, and task dates. It does not independently read Gmail or
+Calendar in this release, so the capture automation must preserve relevant
+source context on the Working Task.
+
+The exact Slack draft is stored in the message approval ledger. p-OPS then
+posts a review card in `#ask-partners` with the source task, supporting context,
+draft preview, destination link, and p-OPS review link. The destination message
+is not posted. `P_OPS_SEND_MESSAGES` remains false.
