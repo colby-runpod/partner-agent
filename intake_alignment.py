@@ -10,7 +10,7 @@ import os
 import re
 import urllib.parse
 
-GUIDE_VERSION = '2026-11-09.1'
+GUIDE_VERSION = '2026-11-10.1'
 ACTIVITY = 'b17354bc-69b1-44fe-bb92-7fda8fab1a5d'
 INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 OUTBOX = 'b9f3d371-6c3b-47f5-880a-47342ae69456'
@@ -75,7 +75,7 @@ def audit(req, key, action, detail, intake=None, outbox=None, channel='', permal
     props = {'Event':title(action+': '+detail[:120]), 'Source Ref':rich(ref),
              'Action':{'select':{'name':action}}, 'Actor':{'select':{'name':actor}},
              'When':{'date':{'start':stamp}}, 'Detail':rich(detail), 'Guide Version':rich(GUIDE_VERSION),
-             'Run':rich('tpa '+stamp[:10]), 'Channel':rich(channel),
+             'Run':rich(__import__('automation_ledger').run_name(stamp)), 'Channel':rich(channel),
              'Status Before':rich(before), 'Status After':rich(after)}
     if intake: props['Intake'] = {'relation':[{'id':intake}]}
     if outbox: props['Outbox Row'] = {'relation':[{'id':outbox}]}
@@ -318,6 +318,12 @@ def build_recap(remote, now_utc, start):
            '_Coverage: shared Partner Biz Dev and Outbox, including pipeline/Gmail intake. Includes earlier outstanding work._',
            'Sources: '+', '.join(html.escape(k)+': '+str(v) for k,v in sorted(sources.items()))]
     lines.append(guide_summary(remote.notion, start))
+    import automation_ledger
+    snapshot = automation_ledger._snapshot
+    if snapshot.get('open_items'):
+        lines.append('*Pipeline open items (last reported; reconcile against current receipts):*\n' + html.escape(snapshot['open_items'][:1800]))
+    if snapshot.get('fallback'):
+        lines.append(html.escape(snapshot['fallback']))
     for name,entries in groups.items():
         if entries:
             # Historical outstanding work remains counted, not expanded into hundreds of posts.
@@ -393,6 +399,7 @@ review. Last validated owners survive a temporary Notion outage in this process.
             if scenario['id'].replace('-','') not in (
                 '40fff732fc348187b3cbf23755ad4ea5',
                 '40fff732fc3481e2894cc6bbfa2f97dc',
+                '415ff732fc3481a3bc9bed7bf86a37b6',  # Approved ledger proposal; no new action authority.
             ): unknown.append(scenario['id'])
         if unknown:
             raise ValueError('New scenario pages require applicability/policy review: '+', '.join(unknown))
@@ -421,6 +428,8 @@ review. Last validated owners survive a temporary Notion outage in this process.
         GUIDE_VERSION=version[1]
         _GUIDE_STATE['policy']=policy
         _GUIDE_STATE.update(degraded=False, blocked=False, reason='')
+        import automation_ledger
+        automation_ledger.read(req)
         reviewed=re.search(r'Last reviewed:\s*(\d{4}-\d{2}-\d{2})',text)
         _GUIDE_STATE['reviewed'] = reviewed[1] if reviewed else ''
         if reviewed and (dt.date.today()-dt.date.fromisoformat(reviewed[1])).days>14:
@@ -516,7 +525,7 @@ policy sections and status-table contents. A prose-policy change requires review
         kind=b['type']; data=b.get(kind,{})
         text=''.join(x.get('plain_text') or x.get('text',{}).get('content','') for x in data.get('rich_text',[]))
         if kind=='heading_2':
-            m=re.match(r'(\d+)\.',text);section=int(m[1]) if m else 0
+            m=re.match(r'(\d+)[a-z]?\.',text);section=int(m[1]) if m else 0
             routing_table=False
         if not 1<=section<=9: continue
         if kind=='table' and section==5 and not routing_table:
