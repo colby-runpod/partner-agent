@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from p_ops_runtime import (Dashboard, PARTNER_OPS_APP_ID, RuntimeApp, RuntimeState,
                            _csrf, components, config, run_once)
+from p_ops_notifications import ReviewNotificationLedger
 from p_ops_triage import TriageDecision
 
 
@@ -308,6 +309,33 @@ class RuntimeTests(unittest.TestCase):
         guarded = json.loads(saved[0]["decision_json"])
         self.assertFalse(guarded["executable"])
         self.assertIn("pilot_shadow_mode", guarded["policy_reasons"])
+
+    def test_operator_can_queue_one_existing_shadow_result_to_its_source_thread(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=False,
+                   review_interactive=False, review_user_ids={"U1"}, review_channel="",
+                   public_url="https://p-ops.example")
+        event = {"event_id": "EvExisting", "team_id": "T1", "channel": "C1", "ts": "321.654",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        run_once(cfg, self.stores, {"slack_capture": FakeCaptureClient(), "notion": FakeNotion(),
+                                    "triage": FakeTriage()}, today=dt.date(2026, 10, 15))
+        shadow = self.stores[5].rows()[0]
+
+        review_cfg = dict(cfg, review_posting=True, review_channel="C1")
+        dashboard = Dashboard(review_cfg, *self.stores)
+        app = RuntimeApp(review_cfg, dashboard, FakeSlackApp())
+        status, _, body = request(app, "/review")
+        self.assertEqual("200 OK", status)
+        self.assertIn(b"Review in Slack", body)
+        form = urllib.parse.urlencode({"kind": "triage", "action": "queue_review", "id": shadow["id"],
+            "csrf": _csrf(review_cfg, "triage", "queue_review", shadow["id"])}).encode()
+        self.assertEqual("303 See Other", request(app, "/review/action", "POST", form)[0])
+        notice = ReviewNotificationLedger(review_cfg["db"]).get(shadow["id"])
+        self.assertEqual("queued", notice["state"])
+        self.assertEqual("C1", notice["channel"])
+        self.assertEqual("321.654", notice["thread_ts"])
+        self.assertEqual("U1", notice["requester_user_id"])
+        self.assertEqual("400 Bad Request", request(app, "/review/action", "POST", form)[0])
 
     def test_shadow_triage_posts_one_scoped_review_notification(self):
         cfg = dict(self.cfg, triage_shadow=True, review_posting=True)
