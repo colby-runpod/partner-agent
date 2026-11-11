@@ -60,6 +60,14 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn('"P_OPS_LINEAR_WRITE"', script)
         self.assertIn('"P_OPS_SEND_MESSAGES"', script)
 
+    def test_task_progression_pilot_is_allowlisted_and_preparation_only(self):
+        script = (ROOT / "scripts" / "deploy_partner_ops_aws.py").read_text()
+        self.assertIn('"--enable-task-progression-test"', script)
+        self.assertIn("Task progression requires the Slack review test stage.", script)
+        self.assertIn('"P_OPS_TASK_PROGRESSION_ENABLED", "value": "true" if task_progression_test else "false"', script)
+        self.assertIn('"channel_id": "C0CE711BW06"', script)
+        self.assertIn('"P_OPS_SEND_MESSAGES"', script)
+
     def test_setup_requires_separate_slack_credentials(self):
         guide = (ROOT / "PARTNER-OPS-AWS-SETUP.md").read_text()
         self.assertIn("Do not copy the Team Partner Agent token", guide)

@@ -15,6 +15,7 @@ The runtime provides:
 - A daily Notion review preview that runs once per America/Denver calendar day when enabled.
 - Separate execution gates for Notion task creation, Notion updates, Linear creation, and outbound messages.
 - A sequential Slack review flow that records one allowlisted answer at a time without executing the underlying action.
+- A guarded Working Task progression stage that prepares exact, destination-allowlisted Slack drafts and routes them to `#ask-partners` for review without sending them.
 
 ## Safe deployment order
 
@@ -31,6 +32,12 @@ The runtime provides:
 11. Verify the dedicated `partner-ops` Slack identity and enable the Working Task briefing separately. Validate the first natural brief or hold receipt before calling it live.
 12. Connect Linear with least privilege. Keep creation review-required during the pilot.
 13. Enable outbound messages last. Email delivery is not implemented in this runtime. Slack drafts require exact-content approval and a second send-authorization action.
+
+Before step 13, the task-progression pilot may be enabled independently. It
+requires explicit task metadata, confidence/priority/risk thresholds, and one
+allowlisted destination match. Its review card links to the Working Task, the
+destination Slack channel, and the exact draft in p-OPS. It does not create a
+Slack composer draft and does not post to the destination.
 
 ## Slack identity boundary
 
