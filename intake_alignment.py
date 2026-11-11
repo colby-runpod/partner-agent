@@ -10,7 +10,7 @@ import os
 import re
 import urllib.parse
 
-GUIDE_VERSION = '2026-11-10.1'
+GUIDE_VERSION = '2026-11-11.2'
 ACTIVITY = 'b17354bc-69b1-44fe-bb92-7fda8fab1a5d'
 INTAKE = 'ffecfb43-625c-42c6-a6af-1f8951641bba'
 OUTBOX = 'b9f3d371-6c3b-47f5-880a-47342ae69456'
@@ -400,6 +400,7 @@ review. Last validated owners survive a temporary Notion outage in this process.
                 '40fff732fc348187b3cbf23755ad4ea5',
                 '40fff732fc3481e2894cc6bbfa2f97dc',
                 '415ff732fc3481a3bc9bed7bf86a37b6',  # Approved ledger proposal; no new action authority.
+                '415ff732fc348156ae54f8d0ad2763e3',  # Working Task capture; separate process, no intake authority.
             ): unknown.append(scenario['id'])
         if unknown:
             raise ValueError('New scenario pages require applicability/policy review: '+', '.join(unknown))

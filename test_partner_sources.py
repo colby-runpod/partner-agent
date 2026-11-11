@@ -189,7 +189,7 @@ class RoutingActions(unittest.TestCase):
 
 class VCRouting(RoutingActions):
     def test_vc_automatic_and_manual_share_delivery_and_format(self):
-        self.data.update(route='Partnerships',partnership_type='VC/PE/Incubator',
+        self.data.update(route='VC/Incubator',partnership_type='VC/PE/Incubator',
                          screening={'tier':'Route'},summary='Portfolio enablement request',
                          event_motion='Do not use this event description')
         self.save()
@@ -206,9 +206,9 @@ class VCRouting(RoutingActions):
         self.assertIn('VC/incubator handoff: Delivered',self.ledger.review(self.event['key'])['notes'])
 
     def test_vc_gates_and_unrelated_partnerships(self):
-        data=dict(self.data,route='Partnerships',partnership_type='VC/PE/Incubator',screening={'tier':'Qualify'})
+        data=dict(self.data,route='VC/Incubator',partnership_type='VC/PE/Incubator',screening={'tier':'Qualify'})
         self.assertIsNotNone(src.handoff(data,self.event,self.cfg))
-        self.assertIsNone(src.handoff(dict(data,partnership_type='Reseller/VAR'),self.event,self.cfg))
+        self.assertIsNone(src.handoff(dict(data,route='Partnerships',partnership_type='VC/PE/Incubator'),self.event,self.cfg))
         self.assertIsNotNone(src.handoff(dict(data,screening={'tier':'Hold for Colby'}),self.event,self.cfg))
         for signal in ('spam',):
             self.assertIsNone(src.handoff(dict(data,signals={signal:True}),self.event,self.cfg,requested_route=src.VC_ROUTE))

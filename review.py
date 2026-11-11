@@ -58,6 +58,7 @@ import urllib.request
 import assistant
 import outbox
 import screening
+import routing_policy
 import chat
 import tasks
 from intake import Application, Store, api, flatten, verify
@@ -128,7 +129,7 @@ Four checks, each verified, partial or unverified:
 
 Signals (true or false), reported honestly; the score and decision are computed from them, so do not
 state a score or decision anywhere:
-- spam: an advertisement, mass solicitation, SEO or link-placement pitch, or nonsense.
+- spam: clearly unrelated mass solicitation, scam/phishing, SEO/link-building bait or nonsense. A legitimate sponsorship, creator, vendor or commercial pitch is not automatically spam.
 - wrong_door: a legitimate sender whose ask is not a partnership at all (support, investing in
   Runpod, selling the company, job seeking).
 - below_supply_bar: a supply offer of consumer GPUs below about a rack, a broker with no site, or an
@@ -145,19 +146,8 @@ state a score or decision anywhere:
 - blocker: a short phrase if something must be cleared by a human first (sanctions or export-control
   exposure, a 1260H-type listing, an unverifiable claim that decides the outcome), else "".
 
-Routes:
-- Supply Team: datacenter capacity, colocation, powered shell, GPU supply to Runpod.
-- Sales: a customer purchase, renewal, or commercial or compliance question only Sales can answer.
-- Events/Sponsorship: money, credits, swag, a booth or a speaker for an event with a date and audience.
-- Affiliate Program: explicit affiliate enrollment, tracked referral links or commission-on-referred-usage inquiries. Log to the affiliate team channel for human follow-up; no automatic applicant email. Do not use this route for named-customer referral partnerships, paid sponsorship, or technology integration.
-- Influencer/Creator: paid content, creator sponsorship, directory or listing proposals without explicit affiliate-program intent. Do not assume all creators want the affiliate program.
-- Research/University: an institution, lab or researcher asking for compute for research, teaching or
-  a cohort with a real workload. A university buying capacity is Sales.
-- Startup Program: individual startup credits or accelerator asks. Route to Cameron for program eligibility and application guidance; do not promise acceptance or credits.
-- Partnerships: reseller, technology/integration, AI/model, co-marketing, VC/PE/incubator, referral,
-  SI, consultancy or MSP motions.
-- Product/Eng: technology Runpod would consume, where a specific team would plausibly want it.
-- Review Needed: genuinely ambiguous ownership.
+Routes are selected by the request-based routing contract below. Organization type,
+missing event metadata or low qualification never override the requested transaction.
 
 next_step: the single best action if Runpod engages, for example "Probe with one question about
 <topic>", "Hand to Dean (supply)", "File a MOPS ticket so Sales picks it up", "Invite to apply to the
@@ -205,14 +195,13 @@ Return exactly this JSON shape:
              "specific_motion": false, "named_customer": false, "quantified_volume": false,
              "warm_intro": false, "notable_counterparty": false, "already_in_play": false,
              "blocker": ""},
+ "routing_context": {"intent":"unclear", "subtype":"unspecified", "rationale":"", "secondary_consultation":"", "commercial_role":"", "event_date":"", "decision_deadline":""},
  "requested_partnership": "", "requested_action": "", "offered_value": "",
  "summary": "", "why": "", "headline": "", "next_step": "", "probe_ask": "", "region": "",
  "dean_motion": "", "event_motion": "", "risks": [""], "sources": [{"title": "", "url": "https://..."}]}''' % (
     ', '.join(TYPES), ', '.join(ROUTES))
 
-INSTRUCTIONS += '''
-Startup Program is an individual company seeking credits/perks for itself; VC/Incubator is a fund, accelerator or studio seeking a portfolio partnership. Use these distinct routes. Marketing is non-event, non-creator campaign collaboration. Route research/teaching requests to Research/University and event sponsorship to Events/Sponsorship even for a university. Specialist routing is independent of quality; state risks as warnings, not approval or automatic rejection.
-'''
+INSTRUCTIONS += routing_policy.INSTRUCTIONS
 
 SCREENING_INSTRUCTIONS = '''
 Additional screening v2 fields supersede older scoring implications, not the existing JSON fields.
@@ -615,6 +604,7 @@ def parse(raw, screening_v2=False):
     for name in ('identity', 'company', 'fit', 'potential'):
         item = checks.get(name) if isinstance(checks.get(name), dict) else {}
         review['checks'][name] = (pick(item.get('verdict'), VERDICTS, 'unverified'), _clean(item.get('note'), 300))
+    review['route'], review['routing_context'] = routing_policy.normalize(data.get('routing_context'), review['route'])
     review['signals'] = {name: raw_signals.get(name) is True for name in SIGNALS}
     review['signals']['blocker'] = _clean(raw_signals.get('blocker'), 120)
     review['score'], review['decision'] = decide(review['checks'], review['signals'], review['route'])
@@ -718,6 +708,7 @@ def render(review, history=None, draft_list=()):
         ('Email', partner_sources.safe(review.get('email'))), ('Region', partner_sources.safe(review.get('region'))),
         ('Lead score', partner_sources.score_badge(review)),
         ('Assessment', partner_sources.assessment(review)), ('Route', review['route']))]
+    lines += ['• *%s:* %s' % (label, partner_sources.safe(value)) for label, value in routing_policy.detail_lines(review.get('routing_context'))]
     crm = hubspot_links.canonical(review.get('hubspot_url'))
     lines += ['• *HubSpot contact:* '+('<'+crm+'|View contact in HubSpot>' if crm else 'Not available in the original submission')]
     lines += ['', '*Partnership requested:* '+review.get('requested_partnership', 'Not captured in this saved review'),
@@ -732,7 +723,7 @@ def render(review, history=None, draft_list=()):
         step = review['next_step']
     if review.get('screening'):
         step = partner_sources.suggested_review(review)
-    if review['signals']['blocker'] or review['route'] in ('Supply Team', 'Events/Sponsorship', 'Research/University', 'Affiliate Program'):
+    if review['signals']['blocker'] or review['route'] in alignment.ROUTES:
         step = partner_sources.suggested_review(review)
     lines += ['', ':point_right: *Suggested next step:* ' + step]
     if review['signals']['blocker']:
@@ -802,7 +793,7 @@ class Ledger:
             if review:
                 keep = {k: r.get(k) for k in ('company', 'company_short', 'contact', 'first_name', 'email', 'submitted',
                                                'partnership_type', 'route', 'score', 'decision', 'summary', 'why',
-                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals', 'hubspot_url', 'requested_partnership', 'requested_action', 'offered_value')}
+                                               'next_step', 'headline', 'screening', 'region', 'dean_motion', 'event_motion', 'signals', 'hubspot_url', 'requested_partnership', 'requested_action', 'offered_value', 'routing_context')}
                 keep['source_event'] = dict(event)
                 keep['checks'] = r.get('checks', {})
                 keep['drafts'] = [list(d) for d in r.get('drafts', [])]
@@ -1079,6 +1070,9 @@ def process(store, job, clients, ledger=None, cfg=None):
                 data=getattr(clients,'last',{})
                 route=alignment.set_route(NotionWriter(cfg),intake_page,('Affiliate Program' if data.get('route')=='Influencer/Creator' else data.get('route')) or 'Review Needed',key)
                 data['route']=route
+                if data.get('routing_context'):
+                    alignment.audit(NotionWriter(cfg)._req, key+':routing-context:'+routing_policy.VERSION, 'Note',
+                        'Request classification (advisory); saved Forward To='+route+'; '+json.dumps(data['routing_context'],sort_keys=True),intake=intake_page['id'])
                 if alignment.value(intake_page,'Contact')=='Partner submission':
                     props={'Contact':alignment.title(data.get('contact') or data.get('company') or 'Unknown contact'),
                            'Company':alignment.rich(data.get('company') or ''),
