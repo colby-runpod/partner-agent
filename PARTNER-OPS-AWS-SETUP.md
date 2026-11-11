@@ -89,3 +89,27 @@ The capture-test allowlist is intentionally fixed to channel `C0C7HG8KYFL` and u
 Add `--enable-shadow-triage-test` together with `--enable-capture-test` only after the dedicated `partner-ops/notion-token` and `partner-ops/anthropic-api-key` secrets pass read-only preflight. Shadow triage rereads relevant Working Tasks and produces a guarded recommendation in the internal ledger. It does not post the result to Slack or enable Notion, Linear, message, briefing, or approval writes.
 
 The initial model is fixed to `claude-sonnet-4-6`. Changing the model, expanding Notion access, or enabling a Slack review response requires a separate reviewed stage.
+
+## Guarded Slack review pilot
+
+After one representative shadow evaluation has been inspected, add
+`--enable-slack-review-test` together with the capture and shadow-triage flags.
+This stage posts the generated review card only in the originating
+`#ask-partners` thread, tags the requester, and asks one decision question at a
+time. Only Colby's allowlisted Slack user may answer with the buttons or the
+supported short replies.
+
+```text
+python scripts/deploy_partner_ops_aws.py \
+  --subnets subnet-a,subnet-b,subnet-c \
+  --deploy-disabled \
+  --enable-capture-test \
+  --enable-shadow-triage-test \
+  --enable-slack-review-test
+```
+
+Despite the historical `--deploy-disabled` acknowledgement name, this stage
+allows only the narrowly generated internal review response. Notion creation
+and updates, Linear writes, the Working Task briefing, daily previews, general
+message sending, email, and execution remain disabled. Recorded Slack answers
+do not authorize those capabilities.

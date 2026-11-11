@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Build and deploy the dedicated Partner Ops AWS service in disabled mode.
+"""Build and deploy the dedicated Partner Ops AWS service in guarded stages.
 
-This script never configures Slack endpoints and never enables capture,
-briefing, review posting, external writes, or message sending.
+This script never configures Slack endpoints. Its most permissive pilot stage
+may capture, evaluate, and post an interactive review in the approved Slack
+thread. Briefing, Notion, Linear, general message, and execution gates remain
+off.
 """
 import argparse
 import json
@@ -63,12 +65,11 @@ def build_and_push(repository, tag):
     return repository + "@" + digest
 
 
-def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_test=False):
+def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_test=False,
+                    slack_review_test=False, public_url=""):
     disabled = [
-        "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_REVIEW_POSTING_ENABLED",
-        "P_OPS_REVIEW_INTERACTIVE_ENABLED", "P_OPS_NOTION_CREATE",
-        "P_OPS_NOTION_WRITE", "P_OPS_LINEAR_WRITE", "P_OPS_SEND_MESSAGES",
-        "P_OPS_WORKING_TASK_BRIEF_ENABLED",
+        "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_NOTION_CREATE", "P_OPS_NOTION_WRITE",
+        "P_OPS_LINEAR_WRITE", "P_OPS_SEND_MESSAGES", "P_OPS_WORKING_TASK_BRIEF_ENABLED",
     ]
     environment = [
         {"name": "P_OPS_ENABLED", "value": "true"},
@@ -79,6 +80,8 @@ def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_t
         {"name": "PORT", "value": "8080"},
         {"name": "P_OPS_CAPTURE_ENABLED", "value": "true" if capture_test else "false"},
         {"name": "P_OPS_TRIAGE_SHADOW_ENABLED", "value": "true" if shadow_triage_test else "false"},
+        {"name": "P_OPS_REVIEW_POSTING_ENABLED", "value": "true" if slack_review_test else "false"},
+        {"name": "P_OPS_REVIEW_INTERACTIVE_ENABLED", "value": "true" if slack_review_test else "false"},
     ] + [{"name": name, "value": "false"} for name in disabled]
     if capture_test:
         environment.extend([
@@ -87,6 +90,14 @@ def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_t
         ])
     if shadow_triage_test:
         environment.append({"name": "ANTHROPIC_MODEL", "value": SHADOW_TRIAGE_MODEL})
+    if slack_review_test:
+        if not public_url.startswith("https://"):
+            raise ValueError("The existing Partner Ops HTTPS endpoint is required for Slack review testing.")
+        environment.extend([
+            {"name": "P_OPS_REVIEW_CHANNEL_ID", "value": CAPTURE_TEST_CHANNEL_ID},
+            {"name": "P_OPS_REVIEW_USER_IDS", "value": CAPTURE_TEST_USER_ID},
+            {"name": "P_OPS_PUBLIC_URL", "value": public_url.rstrip("/")},
+        ])
     definition = {
         "family": "partner-ops-agent",
         "executionRoleArn": outputs["ExecutionRoleArn"],
@@ -157,6 +168,14 @@ def existing_service():
     return result.get("service")
 
 
+def public_endpoint(service):
+    for revision in (service or {}).get("activeConfigurations", []):
+        for ingress in revision.get("ingressPaths", []):
+            if ingress.get("accessType") == "PUBLIC" and ingress.get("endpoint"):
+                return ingress["endpoint"].rstrip("/")
+    return ""
+
+
 def deploy(task_arn, outputs, subnets):
     network = json.dumps({
         "securityGroups": [outputs["TaskSecurityGroupId"]],
@@ -183,7 +202,8 @@ def deploy(task_arn, outputs, subnets):
     return result["service"]["serviceArn"]
 
 
-def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False):
+def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False,
+                      slack_review_test=False):
     deadline = time.time() + 900
     while time.time() < deadline:
         service = aws("ecs", "describe-express-gateway-service", "--service-arn", service_arn)["service"]
@@ -198,7 +218,9 @@ def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False)
                                 health.get("slack_app_id") == PARTNER_OPS_APP_ID and
                                 health.get("working_task_brief_enabled") is False and
                                 health.get("capture_enabled") is capture_test and
-                                health.get("triage_shadow_enabled") is shadow_triage_test):
+                                health.get("triage_shadow_enabled") is shadow_triage_test and
+                                health.get("review_posting_enabled") is slack_review_test and
+                                health.get("review_interactive_enabled") is slack_review_test):
                             return endpoint, health
                     except (OSError, ValueError):
                         pass
@@ -216,29 +238,41 @@ def main():
                         help="Enable capture only for Colby in #ask-partners; all downstream gates stay off.")
     parser.add_argument("--enable-shadow-triage-test", action="store_true",
                         help="Evaluate captured items in read-only shadow mode without posting or writing.")
+    parser.add_argument("--enable-slack-review-test", action="store_true",
+                        help="Post the shadow result and collect decisions only in the source #ask-partners thread.")
     args = parser.parse_args()
     if not args.deploy_disabled:
-        raise SystemExit("Pass --deploy-disabled. This script cannot activate Partner Ops processing.")
+        raise SystemExit("Pass --deploy-disabled to acknowledge that all execution and external-write gates remain off.")
     if args.enable_shadow_triage_test and not args.enable_capture_test:
         raise SystemExit("Shadow triage requires --enable-capture-test.")
+    if args.enable_slack_review_test and not (args.enable_capture_test and args.enable_shadow_triage_test):
+        raise SystemExit("Slack review requires both capture and shadow triage test stages.")
     subnets = [value.strip() for value in args.subnets.split(",") if value.strip()]
     outputs = stack_outputs()
+    service = existing_service()
+    endpoint = public_endpoint(service)
+    if args.enable_slack_review_test and not endpoint:
+        raise SystemExit("Deploy and verify the guarded AWS service before enabling Slack review.")
     tag = clean_commit()
     image = build_and_push(outputs["RepositoryUri"], tag)
     task_arn = register(task_definition(image, outputs, subnets,
                                         capture_test=args.enable_capture_test,
-                                        shadow_triage_test=args.enable_shadow_triage_test))
+                                        shadow_triage_test=args.enable_shadow_triage_test,
+                                        slack_review_test=args.enable_slack_review_test,
+                                        public_url=endpoint))
     service_arn = deploy(task_arn, outputs, subnets)
     endpoint, health = wait_for_endpoint(service_arn,
                                          capture_test=args.enable_capture_test,
-                                         shadow_triage_test=args.enable_shadow_triage_test)
+                                         shadow_triage_test=args.enable_shadow_triage_test,
+                                         slack_review_test=args.enable_slack_review_test)
     print(json.dumps({
         "service": service_arn,
         "task_definition": task_arn,
         "image": image,
         "endpoint": endpoint,
         "health": health,
-        "activation": ("shadow-triage-test" if args.enable_shadow_triage_test else
+        "activation": ("slack-review-test" if args.enable_slack_review_test else
+                       "shadow-triage-test" if args.enable_shadow_triage_test else
                        "capture-test" if args.enable_capture_test else "disabled"),
     }, indent=2, sort_keys=True))
 
