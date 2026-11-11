@@ -12,6 +12,7 @@ import html
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 import urllib.error
@@ -489,6 +490,30 @@ def _button(cfg, kind, action, item_id, label):
             tuple(html.escape(x, quote=True) for x in (kind, action, item_id, token, css_class, label)))
 
 
+def queue_existing_review(cfg, triage, item_id):
+    """Queue one already-completed shadow result for its original Slack thread."""
+    if not cfg.get("review_posting"):
+        raise ValueError("Slack review posting is disabled.")
+    row = triage.get(item_id)
+    if row.get("state") != "shadow" or not row.get("decision_json"):
+        raise ValueError("Only a completed shadow result can be queued.")
+    source = json.loads(row["bundle_json"]).get("source") or {}
+    channel = str(source.get("channel") or "")
+    thread_ts = str(source.get("thread_ts") or "")
+    requester = str(source.get("requester_user_id") or "")
+    if channel != cfg.get("review_channel") or not re.fullmatch(r"\d+\.\d+", thread_ts):
+        raise ValueError("The original approved Slack thread is required.")
+    if requester not in cfg.get("review_user_ids", set()):
+        raise ValueError("The original requester is not allowlisted for review.")
+    notifications = ReviewNotificationLedger(cfg["db"])
+    try:
+        notifications.get(item_id)
+    except KeyError:
+        notifications.queue(row, channel, cfg.get("public_url", ""), thread_ts, requester)
+        return "queued"
+    raise ValueError("This shadow result already has a review notification.")
+
+
 def _card(title, state, body, buttons="", kind="Work item"):
     state_class = "".join(character if character.isalnum() else "-" for character in state.lower()).strip("-")
     actions = "<div class='actions'>%s</div>" % buttons if buttons else ""
@@ -828,7 +853,10 @@ class Dashboard:
                 bundle = json.loads(row["bundle_json"])
                 title = bundle["source"].get("text", "Shadow triage")[:120]
                 body = row["error"] or "Triage failed."
-            cards.append(_card(title, row["state"], body, kind="Read-only evaluation"))
+            buttons = ""
+            if row["state"] == "shadow" and self.cfg.get("review_posting"):
+                buttons = _button(self.cfg, "triage", "queue_review", row["id"], "Review in Slack")
+            cards.append(_card(title, row["state"], body, buttons, "Read-only evaluation"))
             activity.append((title, row["state"], "Read-only evaluation"))
         sections.append(_section("shadow-triage", "Shadow triage",
                                  "Read-only decisions used to calibrate the agent before automation.", cards))
@@ -1003,6 +1031,8 @@ class Dashboard:
         elif kind == "linear" and action == "reject": self.linear.reject(item_id)
         elif kind == "notion" and action == "approve": self.notion.approve(item_id)
         elif kind == "notion" and action == "reject": self.notion.reject(item_id)
+        elif kind == "triage" and action == "queue_review":
+            queue_existing_review(self.cfg, self.triage, item_id)
         else: raise ValueError("Unsupported review action.")
 
 
