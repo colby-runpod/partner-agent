@@ -110,7 +110,7 @@ class Contract(unittest.TestCase):
         self.assertIn('<@U0ACSTWBYHG>',self.posts()[0]['text'])
         self.assertEqual(a.value(self.remote.get(p['id']),'Mention IDs'),'U0ACSTWBYHG')
         self.assertEqual(a.value(self.remote.get(self.iid),'Status'),'Actioned')
-        self.assertEqual(a.value(self.remote.activity[0],'Guide Version'),'2026-11-10.1')
+        self.assertEqual(a.value(self.remote.activity[0],'Guide Version'),a.GUIDE_VERSION)
 
     def test_own_queue_creation_sets_current_route_owner_ids(self):
         for route,(_,owners) in a.ROUTES.items():

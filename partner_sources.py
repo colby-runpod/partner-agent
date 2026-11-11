@@ -1,6 +1,7 @@
 """Explicit Colby-approved Slack intake and durable specialist handoffs."""
 import intake_alignment as alignment
 import hubspot_links
+import routing_policy
 import hashlib
 import html
 import json
@@ -83,6 +84,8 @@ def suggested_review(review):
         return 'Confirm available GPUs, site readiness and capacity before discussing fit.'
     if route == 'Events/Sponsorship':
         return 'Confirm the sponsorship ask, audience and decision deadline.'
+    if route == 'Marketing':
+        return 'Review the proposed campaign, audience, deliverables and requested contribution.'
     if route == 'Affiliate Program':
         return 'Review the affiliate request and choose the appropriate onboarding or program guidance.'
     if route == 'Research/University':
@@ -109,8 +112,6 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     if not cfg.get('routing_enabled'): return None
     if requested_by and requested_by != COLBY: return None
     route = requested_route or review.get('route')
-    if not requested_route and route == 'Partnerships' and review.get('partnership_type') == 'VC/PE/Incubator':
-        route = VC_ROUTE
     if route == 'Influencer/Creator': route = 'Affiliate Program'
     startup_request = route == 'Startup Program'
     signals = review.get('signals') or {}
@@ -157,6 +158,8 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
         ('Company',review.get('company')),('Contact',review.get('contact')),('Email',review.get('email')),
         ('Region',review.get('region')), ('Lead score',score_badge(review)),
         ('Assessment',assessment(review))))
+    for label, value in routing_policy.detail_lines(review.get('routing_context')):
+        text += '\n• *'+label+':* '+safe(value)
     text += '\n\n*What they want*'
     text += '\n• *Partnership requested:* '+safe(review.get('requested_partnership') or review.get('partnership_type') or 'Not specified in the saved review', 400)
     text += '\n• *Ask from Runpod:* '+safe(review.get('requested_action') or 'Not separately captured; see the original request', 600)
