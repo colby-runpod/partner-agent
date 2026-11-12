@@ -310,6 +310,24 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(guarded["executable"])
         self.assertIn("pilot_shadow_mode", guarded["policy_reasons"])
 
+    def test_shadow_triage_does_not_repeat_when_context_bundle_changes(self):
+        cfg = dict(self.cfg, triage_shadow=True, review_posting=True)
+        event = {"event_id": "EvStableSource", "team_id": "T1", "channel": "C1", "ts": "123.999",
+                 "reactor": "U1", "reaction": "handshake::skin-tone-2", "event_time": ""}
+        self.stores[0].enqueue(event)
+        notion, triage, sender = FakeNotion(), FakeTriage(), FakeReviewSender()
+        clients = {"slack_capture": FakeCaptureClient(), "notion": notion, "triage": triage,
+                   "review_sender": sender}
+
+        first = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 15))
+        second = run_once(cfg, self.stores, clients, today=dt.date(2026, 10, 16))
+
+        self.assertTrue(any(row[0] == "review_notification" and row[2] == "sent" for row in first))
+        self.assertFalse(any(row[0] == "triage_shadow" for row in second))
+        self.assertFalse(any(row[0] == "review_notification" for row in second))
+        self.assertEqual(1, triage.calls)
+        self.assertEqual(1, len(sender.rows))
+
     def test_operator_can_queue_one_existing_shadow_result_to_its_source_thread(self):
         cfg = dict(self.cfg, triage_shadow=True, review_posting=False,
                    review_interactive=False, review_user_ids={"U1"}, review_channel="",

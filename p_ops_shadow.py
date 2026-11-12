@@ -122,6 +122,20 @@ class ShadowLedger:
                              (source_id, digest)).fetchone()
         return bool(row)
 
+    def has_decision(self, source_id):
+        """Return whether this source already produced a successful triage decision.
+
+        A capture is a single review request. Changes to the surrounding Working
+        Task snapshot or the calendar date must not turn that same request into a
+        new Slack review sequence.
+        """
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT 1 FROM p_ops_triage_shadow WHERE source_id=? AND state='shadow' LIMIT 1",
+                (source_id,),
+            ).fetchone()
+        return bool(row)
+
     def record(self, bundle, guarded):
         digest = bundle_hash(bundle)
         source_id = bundle["source"]["id"]
@@ -173,6 +187,8 @@ def run_shadow(inbox, ledger, notion_client, triage_client, current_date=None):
     results = []
     for row in proposals:
         bundle = bundle_from_inbox(row, pages, current_date=current_date)
+        if ledger.has_decision(bundle["source"]["id"]):
+            continue
         digest = bundle_hash(bundle)
         if ledger.exists(bundle["source"]["id"], digest):
             continue
