@@ -34,6 +34,7 @@ from p_ops_shadow import ShadowLedger, run_shadow
 from p_ops_test_lab import (TestLabLedger, active_task_queue, bundle_from_notion_url,
                             bundle_from_text, evaluate_bundle, validate_corpus)
 from p_ops_triage import ClaudeTriageClient
+from p_ops_tracing import finish_trace, hash_identifier, trace_span, tracing_enabled
 from p_ops_workflow import (ApprovalFlowLedger, SlackApprovalClient, accept_context_reply,
                             process_flows, receive_interaction)
 import working_task_brief
@@ -1074,17 +1075,31 @@ class RuntimeApp:
             body = json.loads(raw)
             if body.get("type") == "url_verification":
                 return respond("200 OK", {"challenge": body.get("challenge", "")})
-            if body.get("type") == "event_callback":
-                if body.get("team_id") == self.cfg.get("team_id") and body.get("api_app_id") == PARTNER_OPS_APP_ID:
-                    feedback = working_task_brief.accept_feedback(body, self.cfg, self.working_task_state)
-                    if feedback:
-                        self.working_task_feedback.enqueue(feedback)
-                capture = accept_capture(body, self.cfg)
-                if capture:
-                    self.dashboard.capture.enqueue(capture)
-                context = accept_context_reply(body, self.cfg, self.approval_flows)
-                if context:
-                    self.approval_flows.enqueue(context)
+            event = body.get("event") or {}
+            with trace_span("partner_ops_slack_event", inputs={
+                    "callback_type": body.get("type", "unknown"),
+                    "event_type": event.get("type", "unknown"),
+                    "event_id_hash": hash_identifier(body.get("event_id")),
+                    "thread_id_hash": hash_identifier(event.get("thread_ts") or event.get("ts")),
+            }) as run:
+                feedback = capture = context = None
+                if body.get("type") == "event_callback":
+                    if body.get("team_id") == self.cfg.get("team_id") and body.get("api_app_id") == PARTNER_OPS_APP_ID:
+                        feedback = working_task_brief.accept_feedback(body, self.cfg, self.working_task_state)
+                        if feedback:
+                            self.working_task_feedback.enqueue(feedback)
+                    capture = accept_capture(body, self.cfg)
+                    if capture:
+                        self.dashboard.capture.enqueue(capture)
+                    context = accept_context_reply(body, self.cfg, self.approval_flows)
+                    if context:
+                        self.approval_flows.enqueue(context)
+                finish_trace(run, {
+                    "capture_count": int(bool(capture)),
+                    "flow_count": int(bool(context)),
+                    "result_count": sum(bool(value) for value in (feedback, capture, context)),
+                    "status": "accepted",
+                })
             return respond("200 OK", {"ok": True})
         except (ValueError, TypeError, KeyError, AttributeError):
             return respond("400 Bad Request", {})
@@ -1166,6 +1181,7 @@ class RuntimeApp:
                                                   "working_task_brief_time": "%02d:%02d Mountain" % (
                                                       self.cfg.get("working_task_brief_hour", 8),
                                                       self.cfg.get("working_task_brief_minute", 15)),
+                                                  "langsmith_tracing_enabled": tracing_enabled(),
                                                   "slack_app_id": self.cfg.get("app_id")}))
         if not self.cfg["runtime_enabled"]:
             return respond("503 Service Unavailable", json.dumps({"error": "p_ops_disabled"}))
@@ -1235,7 +1251,7 @@ def create_app():
     return RuntimeApp(cfg, dashboard, slack_app)
 
 
-def run_once(cfg, stores, clients=None, today=None):
+def _run_once(cfg, stores, clients=None, today=None):
     capture, inbox, messages, linear, notion, triage_ledger = stores
     clients = clients or {}
     results = []
@@ -1350,6 +1366,23 @@ def run_once(cfg, stores, clients=None, today=None):
         if posted:
             results.append(("working_task_brief", day, "attempted"))
     return results
+
+
+def run_once(cfg, stores, clients=None, today=None):
+    """Run one worker cycle inside a redacted, fail-open root trace."""
+    with trace_span("partner_ops_worker_cycle", inputs={
+            "component": "worker",
+            "operation": "poll",
+            "enabled": bool(cfg.get("runtime_enabled")),
+    }) as run:
+        results = _run_once(cfg, stores, clients=clients, today=today)
+        finish_trace(run, {
+            "result_count": len(results),
+            "error_count": sum(1 for row in results
+                               if isinstance(row[-1], str) and row[-1] in {"error", "review"}),
+            "status": "complete",
+        })
+        return results
 
 
 def worker():

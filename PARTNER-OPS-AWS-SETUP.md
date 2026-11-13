@@ -12,7 +12,8 @@ off.
 - One immutable `partner-ops-agent` ECR repository.
 - One encrypted EFS access point mounted at `/data` for the SQLite runtime.
 - Minimum and maximum task count fixed at one. Do not scale this SQLite release.
-- Dedicated execution role, log group and Secrets Manager entries.
+- Dedicated execution role, log group and Secrets Manager entries, including a
+  separate LangSmith API key for optional tracing.
 - Dedicated `partner-ops` Slack identity. The generated Slack secret values are
   disabled-deployment placeholders and must be replaced before Slack routing.
 
@@ -28,7 +29,7 @@ SubnetIds=subnet-a,subnet-b,subnet-c
 ```
 
 The stack creates the repository, EFS storage, mount targets, security groups,
-log group, execution role and four startup secrets. EFS, access credentials and
+log group, execution role and dedicated startup secrets. EFS, access credentials and
 review credentials are retained if the stack is removed.
 
 ## Disabled deployment
@@ -77,6 +78,25 @@ Before configuring Slack Events or Interactivity:
 - A healthy deployment is not proof that Slack or the briefing is live.
 - Mark the Notion Ops record live only after deployed revision, health, Slack
   access and the first natural receipt are verified.
+
+## LangSmith tracing
+
+Partner Ops supports optional, fail-open LangSmith tracing. Tracing records
+workflow stages, timing, model name, counts, confidence, disposition, status,
+and error classes. The application allowlists trace fields and does not send
+raw Slack, Notion, Gmail, Calendar, meeting, prompt, or model-output content.
+
+For local testing, copy the LangSmith settings from `p_ops.env.example`, set a
+valid `LANGSMITH_API_KEY`, and use project `partner-ops-local` with environment
+`local`. For AWS, replace the generated placeholder in
+`partner-ops/langsmith-api-key`, then add `--enable-langsmith-tracing` to an
+otherwise reviewed deployment command. AWS uses project
+`partner-ops-production` and environment `production`.
+
+Do not treat an image build or deployment as proof that tracing works. Verify
+`langsmith_tracing_enabled=true` in `/healthz`, run one non-sensitive test, and
+confirm the root worker trace and its child model trace in LangSmith. A
+LangSmith outage must not stop Partner Ops processing.
 
 ## Capture-only pilot
 
