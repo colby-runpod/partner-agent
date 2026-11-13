@@ -16,6 +16,9 @@ The runtime provides:
 - Separate execution gates for Notion task creation, Notion updates, Linear creation, and outbound messages.
 - A sequential Slack review flow that records one allowlisted answer at a time without executing the underlying action.
 - A guarded Working Task progression stage that prepares exact, destination-allowlisted Slack drafts and routes them to `#ask-partners` for review without sending them.
+- Optional redacted, fail-open LangSmith traces for Slack receipt, worker
+  cycles, model triage, and message drafting. Tracing is a separate deployment
+  gate and does not change execution authority.
 
 ## Safe deployment order
 

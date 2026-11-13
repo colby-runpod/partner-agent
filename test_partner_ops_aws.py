@@ -16,6 +16,8 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn("Name: partner-ops/slack-signing-secret", template)
         self.assertIn("Name: partner-ops/notion-token", template)
         self.assertIn("Name: partner-ops/anthropic-api-key", template)
+        self.assertIn("Name: partner-ops/langsmith-api-key", template)
+        self.assertIn("LangSmithApiKeySecretArn:", template)
         self.assertNotIn("team-partner-agent/pilot/slack", template)
 
     def test_deployment_is_hard_limited_to_disabled_partner_ops(self):
@@ -27,6 +29,10 @@ class PartnerOpsAwsTests(unittest.TestCase):
         self.assertIn('"command": ["python", "p_ops_service.py"]', script)
         self.assertIn('"containerPath": "/data"', script)
         self.assertNotIn("A0C76FQTM62", script)
+        self.assertIn('"LANGSMITH_TRACING", "value": "true" if langsmith_tracing else "false"', script)
+        self.assertIn('"LANGSMITH_PROJECT", "value": "partner-ops-production"', script)
+        self.assertIn('"LANGSMITH_AGENT_ENVIRONMENT", "value": "production"', script)
+        self.assertIn('"--enable-langsmith-tracing"', script)
 
     def test_capture_pilot_is_explicit_and_allowlisted(self):
         script = (ROOT / "scripts" / "deploy_partner_ops_aws.py").read_text()
