@@ -186,7 +186,7 @@ def finish(req, store, when, started, status, result, receipts=()):
             'Run': a.rich(run), 'Guide Version': a.rich(a.GUIDE_VERSION),
             'Started': {'date': {'start': started}},
             'Finished': {'date': {'start': dt.datetime.now(dt.timezone.utc).isoformat()}},
-            'Run Status': {'select': {'name': status}},
+            'Run Status': {'select': {'name': 'Partial' if issues or a._GUIDE_STATE.get('blocked') else status}},
             'Guide Changed Since Last Run': {'checkbox': bool(_snapshot.get('changed'))},
             'Sources Checked': a.rich('Distinct intake rows touched by source: ' + json.dumps(sources, sort_keys=True) +
                 '; shared Partner Biz Dev and Outbox; Activity Log for ' + run +

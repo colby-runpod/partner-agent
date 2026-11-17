@@ -52,6 +52,21 @@ Resources:
                 Action: ecs:DescribeTaskDefinition
                 Resource: '*'
               - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/default-team-partner-agent-a223:*
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/default
+              - Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/default/*
+              - Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/default
+              - Effect: Allow
                 Action: iam:PassRole
                 Resource:
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/ecsTaskExecutionRole

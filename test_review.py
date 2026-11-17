@@ -546,7 +546,7 @@ class LedgerSummaryTests(unittest.TestCase):
         review.process(self.store, self.store.next_job(), client, self.ledger, CFG)
         rows = self.ledger.since(0)
         self.assertEqual((rows[0]['outcome'], rows[0]['delivered']), ('failed', 'sent'))
-        self.assertEqual(client.said[0][0], 'CSUM'); self.assertIn('A review failed', client.said[0][1])
+        self.assertEqual(client.said[0][0], 'CSUM'); self.assertIn('Lead review processing needs attention', client.said[0][1])
 
     def test_successful_review_recorded_from_last(self):
         e = review.accept_review(BODY, CFG); self.store.enqueue(e)

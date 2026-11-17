@@ -92,6 +92,10 @@ class Contract(unittest.TestCase):
         self.box.post(p)
         self.assertEqual(self.posts(),[])
         self.assertEqual(a.value(self.remote.get(p['id']),'Message TS'),'44.1')
+    def test_failure_alert_is_not_a_handoff_receipt(self):
+        p=self.setup();self.remote.history=[{'user':outbox.BOT,'ts':'44.1','text':'A review failed for '+a.value(p,'Body')}]
+        self.box.post(p);self.assertEqual(len(self.posts()),1)
+
     def test_other_users_matching_source_does_not_count(self):
         p=self.setup();self.remote.history=[{'user':'UOTHER','ts':'44.1','text':a.value(p,'Body')}]
         self.box.post(p);self.assertEqual(len(self.posts()),1)
@@ -345,8 +349,8 @@ class Contract(unittest.TestCase):
             version_block['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
             scenarios.append('unreviewed-scenario')
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
-            self.assertTrue(a._GUIDE_STATE['blocked'])
-            self.assertIn('New scenario pages',a._GUIDE_STATE['reason'])
+            self.assertFalse(a._GUIDE_STATE['blocked'])
+            self.assertEqual(a._GUIDE_STATE['unreviewed_scenarios'],['unreviewed-scenario'])
 
     def test_zoe_feedback_requires_mention_and_thread(self):
         import weekly_feedback as w

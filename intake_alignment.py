@@ -210,6 +210,7 @@ def prior_post(remote,r):
     # First use all-status shared receipts, including pipeline/AWS duplicates.
     for p in remote.query({'property':'Related Intake','relation':{'contains':r['related'][0]}}):
         if p['id']==r['id'] or value(p,'Channel ID')!=r['channel'] or value(p,'Thread TS'): continue
+        if value(p,'Kind') != r['kind']: continue
         if value(p,'Message TS') and value(p,'Status') in ('Posted','Confirmed','Declined'):
             return value(p,'Message TS')
     if not links: return None
@@ -220,7 +221,11 @@ def prior_post(remote,r):
         result=remote.slack('conversations.history',args)
         for msg in result.get('messages',[]):
             if msg.get('user')!='U0C7372ET45': continue
-            if links & source_links(msg.get('text','')): return msg['ts']
+            text=msg.get('text','')
+            # A failure notification is not delivery of the queued lead/alert.
+            if re.search(r'A review failed|I could not complete|review processing needs attention',text,re.I): continue
+            if r['kind']=='priority_alert' and not re.search(r'Act now|priority|urgent',text,re.I): continue
+            if links & source_links(text): return msg['ts']
         cursor=result.get('response_metadata',{}).get('next_cursor')
         if not cursor: return None
     raise ValueError('History reconciliation incomplete; hold delivery')
@@ -284,7 +289,9 @@ def build_recap(remote, now_utc, start):
         if failures: group='Delivery failures'
         elif re.search('Parked by Colby',notes,re.I): group='Parked / closed'
         elif status in ('In Review','Flagged') or value(p,'Invitation Decision')=='Call first': group='Your decisions'
-        elif draft and status not in ('Follow Up','Closed'): group='Drafts awaiting your send'
+        elif status in ('Closed','DQ') and recent: group='Parked / closed'
+        elif routed: group='Routed / pickup'
+        elif draft and status not in ('Follow Up','Closed','DQ','Actioned'): group='Drafts awaiting your send'
         elif routed: group='Routed / pickup'
         elif status in ('New','Follow Up','Actioned'): group='Waiting / overdue'
         elif status in ('Closed','DQ') and recent: group='Parked / closed'
@@ -298,7 +305,7 @@ def build_recap(remote, now_utc, start):
         lines=['• *<'+url+'|'+safe(name)+'>* · '+safe(value(p,'Forward To') or 'Review Needed')+' · '+safe(source),
                '  *Request:* '+safe(value(p,'Request Summary')[:350] or 'Not recorded'),
                '  *Status:* '+safe(status)+' · '+('Updated in this reporting window' if recent else 'Earlier outstanding work')]
-        if draft and status not in ('Follow Up','Closed'): lines.append('  *Next:* Colby reviews/sends the saved draft. Draft creation is not an email sent.')
+        if group=='Drafts awaiting your send': lines.append('  *Next:* Colby reviews/sends the saved draft. Draft creation is not an email sent.')
         for o in routed:
             state=value(o,'Status');posted=value(o,'Posted At')
             age=''
@@ -356,6 +363,8 @@ review. Last validated owners survive a temporary Notion outage in this process.
     global _GUIDE_CACHE, _GUIDE_CHECKED, GUIDE_VERSION
     if _GUIDE_CHECKED and time.monotonic()-_GUIDE_CHECKED < 900: return
     _GUIDE_CHECKED=time.monotonic()
+    import automation_ledger
+    automation_ledger.read(req)
     try:
         def blocks(id):
             cursor=''; found=[]
@@ -393,17 +402,25 @@ review. Last validated owners survive a temporary Notion outage in this process.
         scenarios=[b for b in scenario_pages(directory) if b['id'].replace('-','') not in ('40fff732fc34810eac53f085a6d47576','40fff732fc3481d6b394ca03b7149f6d')]
         unknown=[]
         for scenario in scenarios:
-            text_content(blocks(scenario['id']))
+            # Directory membership alone never grants intake authority.
+            # Only reviewed applicable scenarios are loaded; the intake model
+            # remains the independently validated authority for routing.
+            scenario_id=scenario['id'].replace('-','')
             # Reviewed scenarios: weekly updates and the separate, disabled Working Task briefing.
             # Reading a scenario does not enable its feature or grant new action authority.
-            if scenario['id'].replace('-','') not in (
+            if scenario_id not in (
                 '40fff732fc348187b3cbf23755ad4ea5',
                 '40fff732fc3481e2894cc6bbfa2f97dc',
                 '415ff732fc3481a3bc9bed7bf86a37b6',  # Approved ledger proposal; no new action authority.
                 '415ff732fc348156ae54f8d0ad2763e3',  # Working Task capture; separate process, no intake authority.
-            ): unknown.append(scenario['id'])
+            ):
+                unknown.append(scenario['id'])
+            else:
+                text_content(blocks(scenario['id']))
+        _GUIDE_STATE['unreviewed_scenarios']=unknown
         if unknown:
-            raise ValueError('New scenario pages require applicability/policy review: '+', '.join(unknown))
+            audit(req,'scenario-applicability:'+','.join(sorted(unknown)), 'Reconciliation',
+                  'DRIFT: Unreviewed scenario pages; no new capabilities authorized. Existing validated intake continues: '+', '.join(unknown))
         active=False; route_table=None
         for b in root:
             if b['type']=='heading_2': active=plain(b['heading_2']['rich_text']).startswith('5.')
