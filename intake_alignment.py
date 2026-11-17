@@ -210,6 +210,7 @@ def prior_post(remote,r):
     # First use all-status shared receipts, including pipeline/AWS duplicates.
     for p in remote.query({'property':'Related Intake','relation':{'contains':r['related'][0]}}):
         if p['id']==r['id'] or value(p,'Channel ID')!=r['channel'] or value(p,'Thread TS'): continue
+        if value(p,'Kind') != r['kind']: continue
         if value(p,'Message TS') and value(p,'Status') in ('Posted','Confirmed','Declined'):
             return value(p,'Message TS')
     if not links: return None
@@ -220,7 +221,11 @@ def prior_post(remote,r):
         result=remote.slack('conversations.history',args)
         for msg in result.get('messages',[]):
             if msg.get('user')!='U0C7372ET45': continue
-            if links & source_links(msg.get('text','')): return msg['ts']
+            text=msg.get('text','')
+            # A failure notification is not delivery of the queued lead/alert.
+            if re.search(r'A review failed|I could not complete|review processing needs attention',text,re.I): continue
+            if r['kind']=='priority_alert' and not re.search(r'Act now|priority|urgent',text,re.I): continue
+            if links & source_links(text): return msg['ts']
         cursor=result.get('response_metadata',{}).get('next_cursor')
         if not cursor: return None
     raise ValueError('History reconciliation incomplete; hold delivery')

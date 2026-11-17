@@ -92,6 +92,10 @@ class Contract(unittest.TestCase):
         self.box.post(p)
         self.assertEqual(self.posts(),[])
         self.assertEqual(a.value(self.remote.get(p['id']),'Message TS'),'44.1')
+    def test_failure_alert_is_not_a_handoff_receipt(self):
+        p=self.setup();self.remote.history=[{'user':outbox.BOT,'ts':'44.1','text':'A review failed for '+a.value(p,'Body')}]
+        self.box.post(p);self.assertEqual(len(self.posts()),1)
+
     def test_other_users_matching_source_does_not_count(self):
         p=self.setup();self.remote.history=[{'user':'UOTHER','ts':'44.1','text':a.value(p,'Body')}]
         self.box.post(p);self.assertEqual(len(self.posts()),1)
