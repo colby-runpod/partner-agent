@@ -545,8 +545,13 @@ def worker():
         box = storage.make_outbox(store)
         while True:
             try:
+                import operations_health
+                operations_health.pulse(automation_ledger._store,'outbox')
                 box.poll()
+                pages=list(box.remote.query({'property':'Status','select':{'equals':'Queued'}}))
+                operations_health.pulse(automation_ledger._store,'outbox',error='guide_blocked' if alignment._GUIDE_STATE.get('blocked') else '',backlog=operations_health.classify_backlog(pages))
             except Exception:
+                operations_health.pulse(automation_ledger._store,'outbox',error='poll_failed')
                 print('Outbox poll failed; verify bot identity and Notion access. Retrying in 180 seconds.', flush=True)
             time.sleep(180)
 
