@@ -73,7 +73,8 @@ def build_and_push(repository, tag):
 
 
 def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_test=False,
-                    slack_review_test=False, task_progression_test=False, public_url=""):
+                    slack_review_test=False, task_progression_test=False,
+                    langsmith_tracing=False, public_url=""):
     disabled = [
         "P_OPS_DAILY_REVIEW_ENABLED", "P_OPS_NOTION_CREATE", "P_OPS_NOTION_WRITE",
         "P_OPS_LINEAR_WRITE", "P_OPS_SEND_MESSAGES", "P_OPS_WORKING_TASK_BRIEF_ENABLED",
@@ -90,6 +91,11 @@ def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_t
         {"name": "P_OPS_REVIEW_POSTING_ENABLED", "value": "true" if slack_review_test else "false"},
         {"name": "P_OPS_REVIEW_INTERACTIVE_ENABLED", "value": "true" if slack_review_test else "false"},
         {"name": "P_OPS_TASK_PROGRESSION_ENABLED", "value": "true" if task_progression_test else "false"},
+        {"name": "LANGSMITH_TRACING", "value": "true" if langsmith_tracing else "false"},
+        {"name": "LANGSMITH_ENDPOINT", "value": "https://api.smith.langchain.com"},
+        {"name": "LANGSMITH_PROJECT", "value": "partner-ops-production"},
+        {"name": "LANGSMITH_AGENT_ID", "value": "partner-ops"},
+        {"name": "LANGSMITH_AGENT_ENVIRONMENT", "value": "production"},
     ] + [{"name": name, "value": "false"} for name in disabled]
     if capture_test:
         environment.extend([
@@ -149,7 +155,8 @@ def task_definition(image, outputs, subnets, capture_test=False, shadow_triage_t
                 {"name": "P_OPS_CSRF_SECRET", "valueFrom": outputs["CsrfSecretArn"]},
                 {"name": "NOTION_TOKEN", "valueFrom": outputs["NotionTokenSecretArn"]},
                 {"name": "ANTHROPIC_API_KEY", "valueFrom": outputs["AnthropicApiKeySecretArn"]},
-            ],
+            ] + ([{"name": "LANGSMITH_API_KEY", "valueFrom": outputs["LangSmithApiKeySecretArn"]}]
+                 if langsmith_tracing else []),
             "mountPoints": [{
                 "sourceVolume": "partner-ops-data", "containerPath": "/data", "readOnly": False,
             }],
@@ -218,7 +225,8 @@ def deploy(task_arn, outputs, subnets):
 
 
 def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False,
-                      slack_review_test=False, task_progression_test=False):
+                      slack_review_test=False, task_progression_test=False,
+                      langsmith_tracing=False):
     deadline = time.time() + 900
     while time.time() < deadline:
         service = aws("ecs", "describe-express-gateway-service", "--service-arn", service_arn)["service"]
@@ -236,7 +244,8 @@ def wait_for_endpoint(service_arn, capture_test=False, shadow_triage_test=False,
                                 health.get("triage_shadow_enabled") is shadow_triage_test and
                                 health.get("review_posting_enabled") is slack_review_test and
                                 health.get("review_interactive_enabled") is slack_review_test and
-                                health.get("task_progression_enabled") is task_progression_test):
+                                health.get("task_progression_enabled") is task_progression_test and
+                                health.get("langsmith_tracing_enabled") is langsmith_tracing):
                             return endpoint, health
                     except (OSError, ValueError):
                         pass
@@ -258,6 +267,8 @@ def main():
                         help="Post the shadow result and collect decisions only in the source #ask-partners thread.")
     parser.add_argument("--enable-task-progression-test", action="store_true",
                         help="Prepare allowlisted Working Task Slack drafts for internal review.")
+    parser.add_argument("--enable-langsmith-tracing", action="store_true",
+                        help="Enable redacted fail-open LangSmith traces using the dedicated AWS secret.")
     args = parser.parse_args()
     if not args.deploy_disabled:
         raise SystemExit("Pass --deploy-disabled to acknowledge that all execution and external-write gates remain off.")
@@ -280,19 +291,22 @@ def main():
                                         shadow_triage_test=args.enable_shadow_triage_test,
                                         slack_review_test=args.enable_slack_review_test,
                                         task_progression_test=args.enable_task_progression_test,
+                                        langsmith_tracing=args.enable_langsmith_tracing,
                                         public_url=endpoint))
     service_arn = deploy(task_arn, outputs, subnets)
     endpoint, health = wait_for_endpoint(service_arn,
                                          capture_test=args.enable_capture_test,
                                          shadow_triage_test=args.enable_shadow_triage_test,
                                          slack_review_test=args.enable_slack_review_test,
-                                         task_progression_test=args.enable_task_progression_test)
+                                         task_progression_test=args.enable_task_progression_test,
+                                         langsmith_tracing=args.enable_langsmith_tracing)
     print(json.dumps({
         "service": service_arn,
         "task_definition": task_arn,
         "image": image,
         "endpoint": endpoint,
         "health": health,
+        "langsmith_tracing": args.enable_langsmith_tracing,
         "activation": ("task-progression-test" if args.enable_task_progression_test else
                        "slack-review-test" if args.enable_slack_review_test else
                        "shadow-triage-test" if args.enable_shadow_triage_test else

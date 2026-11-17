@@ -191,6 +191,20 @@ Resources:
         - Key: app
           Value: partner-ops
 
+  PartnerOpsLangSmithApiKey:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: partner-ops/langsmith-api-key
+      Description: Dedicated LangSmith credential for redacted, fail-open Partner Ops tracing.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+      Tags:
+        - Key: app
+          Value: partner-ops
+
   PartnerOpsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -219,6 +233,7 @@ Resources:
                   - !Ref PartnerOpsCsrfSecret
                   - !Ref PartnerOpsNotionToken
                   - !Ref PartnerOpsAnthropicApiKey
+                  - !Ref PartnerOpsLangSmithApiKey
 
 Outputs:
   RepositoryUri:
@@ -245,3 +260,5 @@ Outputs:
     Value: !Ref PartnerOpsNotionToken
   AnthropicApiKeySecretArn:
     Value: !Ref PartnerOpsAnthropicApiKey
+  LangSmithApiKeySecretArn:
+    Value: !Ref PartnerOpsLangSmithApiKey

@@ -10,6 +10,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+from p_ops_tracing import finish_trace, hash_identifier, trace_span
 from typing import Optional
 
 
@@ -297,6 +299,22 @@ class ClaudeTriageClient:
             raise ValueError("Set ANTHROPIC_API_KEY and ANTHROPIC_MODEL before model triage.")
 
     def analyze(self, bundle):
+        source = bundle.get("source") or {}
+        with trace_span("partner_ops_claude_triage", run_type="llm", inputs={
+                "model": self.model,
+                "source_type": source.get("type", "unknown"),
+                "source_id_hash": hash_identifier(source.get("id")),
+                "existing_task_count": len(bundle.get("existing_tasks") or []),
+        }) as run:
+            decision = self._analyze(bundle)
+            finish_trace(run, {
+                "disposition": decision.disposition,
+                "confidence": decision.confidence,
+                "review_required": bool(decision.review_reasons),
+            })
+            return decision
+
+    def _analyze(self, bundle):
         payload = {"model": self.model, "max_tokens": 5000, "temperature": 0,
                    "system": TRIAGE_INSTRUCTIONS,
                    "messages": [{"role": "user", "content": json.dumps(bundle, sort_keys=True)}],
