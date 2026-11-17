@@ -324,8 +324,24 @@ class Outbox:
             except Exception:
                 print('Outbox pickup/decision pending; retrying next poll.',flush=True)
         pages=list(self.remote.query({'property':'Status','select':{'equals':'Queued'}}))
-        # Colby's incident priority: Nucleate UK (OUT-166), then oldest first.
-        pages.sort(key=lambda p:(p.get('properties',{}).get('Post ID',{}).get('unique_id',{}).get('number')!=166,p.get('created_time',''),p['id']))
+        import operations_health
+        import automation_ledger
+        health=operations_health.outbox_health(pages)
+        print('Outbox delivery health: '+json.dumps(health),flush=True)
+        if health['overdue']:
+            try:
+                operations_health.notify_once(automation_ledger._store,
+                    lambda message:self.remote.slack('chat.postMessage',{'channel':'C0C7R970C5T','text':message}),
+                    'outbox-delay:'+dt.datetime.now(dt.timezone.utc).date().isoformat(),
+                    ':rotating_light: Handoff backlog: %d queued, %d older than 24 hours; oldest %d hours. Receipt and routing checks still apply. Operator review required.' % (health['queued'],health['overdue'],health['oldest_hours']))
+            except Exception:
+                print('Backlog notification unavailable; queue retained.',flush=True)
+        # Explicit incident priorities do not bypass eligibility or receipt checks.
+        priority=[int(x) for x in os.environ.get('OUTBOX_PRIORITY_IDS','166').split(',') if x.strip().isdigit()]
+        def order(p):
+            number=p.get('properties',{}).get('Post ID',{}).get('unique_id',{}).get('number')
+            return (priority.index(number) if number in priority else len(priority),p.get('created_time',''),p['id'])
+        pages.sort(key=order)
         for page in pages:
             try: self.post(page)
             except Exception:

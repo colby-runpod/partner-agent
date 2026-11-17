@@ -1092,7 +1092,9 @@ def process(store, job, clients, ledger=None, cfg=None):
             text, outcome = NOT_DIGEST, 'not_digest'
         except ThreadUnreadable:
             text, outcome = THREAD_UNREADABLE, 'unreadable'
-        except Exception:
+        except Exception as exc:
+            # Error class is safe to log; credentials or raw API bodies are not.
+            print('Review processing failed: '+type(exc).__name__+'; guide_blocked='+str(bool(alignment._GUIDE_STATE.get('blocked'))),flush=True)
             text, outcome = FAILED, 'failed'
         store.update(key, state='done', reply=text,error='' if outcome=='ok' else 'review_'+outcome)
         if ledger and outcome != 'not_digest':
@@ -1103,7 +1105,16 @@ def process(store, job, clients, ledger=None, cfg=None):
             except Exception:
                 print('Review ledger write failed.', flush=True)
         if cfg and outcome in ('failed', 'unreadable'):
-            alert(clients, cfg, event, 'A review failed')
+            import operations_health
+            cause=('guide:'+alignment._GUIDE_STATE.get('reason','')) if alignment._GUIDE_STATE.get('blocked') else 'review-service'
+            day=__import__('datetime').datetime.now(__import__('datetime').timezone.utc).date().isoformat()
+            try:
+                operations_health.notify_once(ledger,lambda message:clients.say(cfg['summary_channel'],message),
+                    cause+':'+day, ':rotating_light: Lead review processing needs attention. '+
+                    ('Intake guide validation is blocking capture and reviews. ' if alignment._GUIDE_STATE.get('blocked') else 'The review service is failing. ')+
+                    'Failed submissions are retained for recovery. Check AWS job errors and the outbox backlog. This incident alert is limited to once per day.')
+            except Exception:
+                print('Incident notification unavailable; inspect retained jobs.',flush=True)
     job = store.get(key)
     if job['reply'] and job['reply_state'] == 'pending':
         store.update(key, reply_state='sending')

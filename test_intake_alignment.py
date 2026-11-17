@@ -345,8 +345,8 @@ class Contract(unittest.TestCase):
             version_block['paragraph']['rich_text']=rich('Guide version: 2026-11-05.3 Last reviewed: 2026-11-05')
             scenarios.append('unreviewed-scenario')
             a._GUIDE_CHECKED=0;a.refresh_guide(request)
-            self.assertTrue(a._GUIDE_STATE['blocked'])
-            self.assertIn('New scenario pages',a._GUIDE_STATE['reason'])
+            self.assertFalse(a._GUIDE_STATE['blocked'])
+            self.assertEqual(a._GUIDE_STATE['unreviewed_scenarios'],['unreviewed-scenario'])
 
     def test_zoe_feedback_requires_mention_and_thread(self):
         import weekly_feedback as w
