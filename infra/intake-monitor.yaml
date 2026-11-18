@@ -42,7 +42,6 @@ Resources:
       Handler: operations_probe.handler
       Timeout: 25
       MemorySize: 128
-      ReservedConcurrentExecutions: 1
       Role: !GetAtt ProbeRole.Arn
       Code:
         S3Bucket: !Ref CodeBucket
