@@ -353,6 +353,25 @@ _GUIDE_CHECKED = 0
 _GUIDE_STATE = {'degraded': True, 'reason': 'Runtime guide not yet read', 'reviewed': ''}
 
 
+def restore_guide(ledger):
+    """Only restore this release's validated configuration, never executable prose."""
+    global _GUIDE_CACHE
+    if ledger is None or _GUIDE_CACHE is not None:return
+    import json
+    try:
+        saved=json.loads(ledger.get('guide:approved:'+GUIDE_VERSION,'{}'))
+        if saved.get('fingerprint_scope')!='intake-v2' or not re.fullmatch('[0-9a-f]{64}',saved.get('policy','')):return
+        routes=saved['routes']
+        if set(routes)!=set(ROUTES):return
+        for name,(channel,owners) in routes.items():
+            if channel!=ROUTES[name][0] or (not owners and name!='Affiliate Program'):return
+            if any(not re.fullmatch('U[A-Z0-9]{8,}',u) for u in owners):return
+        ROUTES.update({k:(v[0],tuple(v[1])) for k,v in routes.items()})
+        _GUIDE_CACHE=dict(ROUTES)
+        _GUIDE_STATE.update(policy=saved['policy'],reviewed=saved.get('reviewed',''),degraded=True,blocked=False,reason='Using durable last validated intake configuration')
+    except (ValueError,KeyError,TypeError):return
+
+
 def refresh_guide(req):
     """Read the current guide at most every 15 minutes; never execute prose.
 
@@ -364,6 +383,7 @@ review. Last validated owners survive a temporary Notion outage in this process.
     if _GUIDE_CHECKED and time.monotonic()-_GUIDE_CHECKED < 900: return
     _GUIDE_CHECKED=time.monotonic()
     import automation_ledger
+    restore_guide(automation_ledger._store)
     automation_ledger.read(req)
     try:
         def blocks(id):
@@ -450,11 +470,15 @@ review. Last validated owners survive a temporary Notion outage in this process.
         automation_ledger.read(req)
         reviewed=re.search(r'Last reviewed:\s*(\d{4}-\d{2}-\d{2})',text)
         _GUIDE_STATE['reviewed'] = reviewed[1] if reviewed else ''
+        if automation_ledger._store is not None:
+            import json
+            automation_ledger._store.put('guide:approved:'+GUIDE_VERSION,json.dumps(dict(
+                fingerprint_scope='intake-v2',routes=validated,policy=policy,reviewed=_GUIDE_STATE['reviewed'])))
         if reviewed and (dt.date.today()-dt.date.fromisoformat(reviewed[1])).days>14:
             audit(req,'guide-overdue:'+dt.date.today().isoformat(),'Reconciliation','DRIFT: Guide review overdue; section 14')
     except Exception as exc:
         _GUIDE_STATE.update(degraded=True, reason=str(exc)[:200])
-        if isinstance(exc, ValueError): _GUIDE_STATE['blocked']=True
+        if isinstance(exc, ValueError) or _GUIDE_CACHE is None: _GUIDE_STATE['blocked']=True
         # Record the degraded state; a missing log permission must not disappear.
         audit(req,'guide-read:'+dt.date.today().isoformat()+':'+str(exc)[:100], 'Reconciliation',
               'DRIFT: Guide read/validation unavailable; using last reviewed '+GUIDE_VERSION+'. '+str(exc)[:200])
@@ -538,14 +562,16 @@ def policy_fingerprint(root, blocks):
 Exclude routing destinations, review dates and change logs; include all executable
 policy sections and status-table contents. A prose-policy change requires review.
 """
-    selected=[]; section=0; routing_table=False
+    selected=[]; section=0; routing_table=False; applicable=True
     for b in root:
         kind=b['type']; data=b.get(kind,{})
         text=''.join(x.get('plain_text') or x.get('text',{}).get('content','') for x in data.get('rich_text',[]))
         if kind=='heading_2':
-            m=re.match(r'(\d+)[a-z]?\.',text);section=int(m[1]) if m else 0
+            m=re.match(r'(\d+)([a-z]?)\.',text);section=int(m[1]) if m else 0
+            # Ledger/Working Task governance (8a/8b) does not authorize intake actions.
+            applicable=bool(m) and not (section==8 and m[2])
             routing_table=False
-        if not 1<=section<=9: continue
+        if not applicable or not 1<=section<=9: continue
         if kind=='table' and section==5 and not routing_table:
             routing_table=True;continue
         if kind=='table':

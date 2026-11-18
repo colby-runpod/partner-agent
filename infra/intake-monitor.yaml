@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Independent Partner Agent worker-readiness monitoring; no lead or Slack writes.
+Parameters:
+  CodeBucket:
+    Type: String
+  CodeKey:
+    Type: String
+  ReadinessUrl:
+    Type: String
+    AllowedPattern: 'https://[^ ]+/readyz'
+  AgentService:
+    Type: String
+    Default: team-partner-agent-a223
+  AlarmTopicArn:
+    Type: String
+    Description: SNS topic with a confirmed operator subscription. Required before monitoring is considered operational.
+    AllowedPattern: 'arn:aws:sns:[a-z0-9-]+:[0-9]{12}:.+'
+Resources:
+  ProbeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: readiness-metric
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals: {cloudwatch:namespace: Runpod/PartnerAgent}
+  Probe:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: operations_probe.handler
+      Timeout: 25
+      MemorySize: 128
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt ProbeRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          READINESS_URL: !Ref ReadinessUrl
+          AGENT_SERVICE: !Ref AgentService
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: readiness
+          Arn: !GetAtt Probe.Arn
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Probe
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+  ReadinessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Workers stalled, actionable backlog overdue, guide blocked, or probe missing. Inspect receipts before replaying any delivery.
+      Namespace: Runpod/PartnerAgent
+      MetricName: Ready
+      Dimensions:
+        - Name: Service
+          Value: !Ref AgentService
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+Outputs:
+  Alarm:
+    Value: !Ref ReadinessAlarm

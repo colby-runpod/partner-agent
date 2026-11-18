@@ -390,6 +390,14 @@ def create_app():
     app = Application(cfg, storage.make_store(os.environ.get('CHAT_DB', '/data/chat.sqlite3')), accept)
 
     def wsgi(env, start):
+        if env.get('PATH_INFO') == '/readyz' and env.get('REQUEST_METHOD') == 'GET':
+            import operations_health
+            try:
+                state=operations_health.readiness(storage.make_ledger(app.store),
+                    ('queue','outbox') if cfg.get('outbox_enabled') else ('queue',))
+            except Exception: state={'ready':False,'reasons':['storage_unavailable']}
+            start('200 OK' if state['ready'] else '503 Service Unavailable',[('Content-Type','application/json')])
+            return [json.dumps(state).encode()]
         if env.get('PATH_INFO') == '/healthz' and env.get('REQUEST_METHOD') == 'GET':
             data = json.dumps({'status': 'listening', 'chat_enabled': cfg['chat_enabled'],
                                'review_enabled': cfg['review_enabled'], 'review_mode': cfg['review_mode'],
@@ -736,7 +744,7 @@ def render(review, history=None, draft_list=()):
     for name in ('identity', 'company', 'fit', 'potential'):
         verdict, note = review['checks'][name]
         lines.append('• *%s:* %s%s' % (name.capitalize(), verdict, (' - ' + note) if note else ''))
-    if review['why']:
+    if review['why'] and (not review.get('screening') or review['why'] != screening.notes(review['screening'])):
         lines += ['', '*Why* ' + review['why']]
     if review.get('screening'):
         lines += ['', '*' + screening.notes(review['screening']) + '*']
@@ -748,7 +756,8 @@ def render(review, history=None, draft_list=()):
         lines += ['', ':memo: *%s*' % label, body]
     if review['sources']:
         lines += ['', '*Sources* ' + '  ·  '.join('<%s|%s>' % s for s in review['sources'])]
-    lines += ['', '_Advisory only. No prospect outreach or approval. Specialist handoffs are tracked separately._']
+    lines += ['', partner_sources.qualification_context(review),
+              '_Template: '+partner_sources.TEMPLATE_VERSION+' · Advisory only. No prospect outreach or approval. Specialist handoffs are tracked separately._']
     return '\n'.join(lines)
 
 
@@ -1758,6 +1767,8 @@ def worker():
                 except Exception:
                     print('Lead status reconciliation pending retry.', flush=True)
             job = store.next_job()
+            import operations_health
+            operations_health.pulse(ledger,'queue',job=job)
             if not job:
                 if cfg['review_enabled']:
                     run_summary(cfg, ledger, review_clients, store=store)
@@ -1802,6 +1813,10 @@ def worker():
                 assistant.process_agent(store, job, review_clients, chat_clients, cfg, agent_writer)
             else:
                 chat.process(store, job, chat_clients)
+            if job:
+                current=store.get(job['key'])
+                if current['state']=='done':
+                    operations_health.pulse(ledger,'queue',error=current.get('error') or '')
 
 
 if __name__ == '__main__':

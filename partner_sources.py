@@ -61,6 +61,21 @@ def safe(value, limit=1800):
     return html.escape(str(value or 'Not stated')[:limit], quote=False)
 
 
+TEMPLATE_VERSION = '2026-11-17.1'
+
+
+def qualification_context(review):
+    """Never present the legacy 1-5 bucket as the canonical qualification score."""
+    screen=review.get('screening') or {}
+    total=screen.get('total')
+    if type(total) is int and 0 <= total <= 33 and screen.get('tier'):
+        return ('Advisory screening: %s/33 · %s. The 1-5 display is a compatibility bucket, '
+                'not a second qualification score. Final qualification belongs to the pipeline.'
+                % (total,safe(screen['tier'],100)))
+    return ('Advisory priority only; canonical A/S/I/C/V screening is not available in this saved review. '
+            'Missing research is unknown, not a negative finding.')
+
+
 def score_badge(review):
     score = str(review.get('score', ''))
     badges = dict(zip('12345', ('1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣')))
@@ -165,6 +180,7 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     text += '\n• *Ask from Runpod:* '+safe(review.get('requested_action') or 'Not separately captured; see the original request', 600)
     text += '\n• *What they bring:* '+safe(review.get('offered_value') or 'Not separately captured; see the original request', 600)
     text += '\n\n*Assessment notes*\n'+safe(motion or review.get('summary'), 1200)
+    text += '\n'+qualification_context(review)
     text += '\n\n*Suggested review:* '+safe(suggested_review(dict(review, route='Startup Program' if startup_request else route)))
     if not explicit:
         text += '\n_Automatically routed for specialist review. The score is unchanged; this is not approval._'
@@ -180,6 +196,7 @@ def handoff(review, event, cfg, requested_route=None, requested_by=None):
     crm = hubspot_links.source_url(event)
     text += ('\n• <%s|HubSpot contact>' % crm if crm else '\n• HubSpot: Not available in the original submission')
     text += '\n\nReact :white_check_mark: or :eyes: to pick up; :x: to pass.'
+    text += '\n\n_Template: '+TEMPLATE_VERSION+' · Advisory specialist handoff. Routed does not mean picked up or closed._'
     text += '\n\ncc <@%s>' % COLBY
     return dict(completion_source=event,completion_route=route,requested_by=requested_by,kind='specialist_handoff',key=key,event_id=key,channel=channel,text=text,ts=str(time.time()))
 
